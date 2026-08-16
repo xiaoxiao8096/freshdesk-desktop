@@ -1,7 +1,7 @@
 /**
  * 设计提醒：雾面硬件主义。以桌面空间关系组织内容，所有反馈要像精密设备一样安静、迅速、可信。
  */
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   Archive,
   ArrowLeft,
@@ -16,6 +16,7 @@ import {
   CloudSun,
   Command,
   Compass,
+  FilePlus2,
   Folder,
   FolderOpen,
   Gauge,
@@ -32,6 +33,7 @@ import {
   MoreHorizontal,
   Music2,
   Pause,
+  Palette,
   Play,
   Pin,
   Plus,
@@ -84,6 +86,21 @@ type BrowserBookmark = {
   url: string;
 };
 
+type NoteDocument = {
+  id: string;
+  title: string;
+  body: string;
+  updated: string;
+};
+
+type PhotoItem = {
+  id: string;
+  src: string;
+  alt: string;
+  title: string;
+  subtitle: string;
+};
+
 type AppWindow = {
   id: AppName;
   minimized: boolean;
@@ -98,6 +115,24 @@ const ALBUM_ORBIT = "/manus-storage/freshdesk-album-orbit_68ca7295.jpg";
 const ALBUM_TIDE = "/manus-storage/freshdesk-album-tide_658b722a.jpg";
 const BRAND_MARK = "/manus-storage/freshdesk-four-dot-mark_fa52f231.png";
 const MUSIC = "/manus-storage/freshdesk-idle-sequence_94201983.mp3";
+const MUSIC_MORNING = "/manus-storage/freshdesk-morning-window_47548bd8.mp3";
+const MUSIC_NIGHT = "/manus-storage/freshdesk-night-orbit_b6af35f3.mp3";
+const WALLPAPER_SOLAR = "/manus-storage/freshdesk-wallpaper-solar-drift_00688618.jpg";
+const WALLPAPER_ALPINE = "/manus-storage/freshdesk-wallpaper-alpine-cloud_56c37133.jpg";
+
+const wallpapers = [
+  { id: "aurora", title: "晨雾极光", src: WALLPAPER },
+  { id: "solar", title: "日光漂移", src: WALLPAPER_SOLAR },
+  { id: "alpine", title: "高山云层", src: WALLPAPER_ALPINE },
+];
+
+const photoItems: PhotoItem[] = [
+  { id: "aurora", src: WALLPAPER, alt: "晨雾极光壁纸", title: "晨雾极光", subtitle: "桌面收藏 · 今天" },
+  { id: "orbit", src: ALBUM_ORBIT, alt: "蓝色球体构图", title: "轨道切面", subtitle: "声音与形状" },
+  { id: "tide", src: ALBUM_TIDE, alt: "丝绸色彩构图", title: "银色潮汐", subtitle: "材质研究" },
+  { id: "solar", src: WALLPAPER_SOLAR, alt: "日光漂移壁纸", title: "日光漂移", subtitle: "新壁纸 · 原创" },
+  { id: "alpine", src: WALLPAPER_ALPINE, alt: "高山云层壁纸", title: "高山云层", subtitle: "新壁纸 · 原创" },
+];
 
 const appMeta: Record<AppName, { label: string; color: string; icon: typeof FolderOpen }> = {
   finder: { label: "文件", color: "#2d8cff", icon: FolderOpen },
@@ -309,7 +344,20 @@ export default function Home() {
   const [currentTrack, setCurrentTrack] = useState(0);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(150);
-  const [note, setNote] = useState("今天先从一段安静的音乐开始。\n\n桌面已经准备好了。打开任意一个应用，看看这个空间会带你去哪里。");
+  const [activeWallpaperId, setActiveWallpaperId] = useState("aurora");
+  const [notes, setNotes] = useState<NoteDocument[]>([
+    { id: "welcome-note", title: "新桌面的第一天", body: "今天先从一段安静的音乐开始。\n\n桌面已经准备好了。打开任意一个应用，看看这个空间会带你去哪里。", updated: "今天" },
+    { id: "try-list", title: "要尝试的事", body: "- 换一张桌面壁纸\n- 新建一张便笺\n- 把喜欢的网页放进工作组", updated: "昨天" },
+    { id: "future", title: "给未来的提醒", body: "留一点空白，给那些还没发生的好事。", updated: "8 月 14 日" },
+  ]);
+  const [activeNoteId, setActiveNoteId] = useState("welcome-note");
+  const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
+  const [terminalLines, setTerminalLines] = useState<string[]>([
+    "Freshdesk Terminal · simulated environment",
+    "输入 help 查看可用命令。",
+  ]);
+  const [terminalInput, setTerminalInput] = useState("");
+  const [terminalCwd, setTerminalCwd] = useState("~");
   const [systemAppearance, setSystemAppearance] = useState<"light" | "dark">("dark");
   const [snapPreview, setSnapPreview] = useState<SnapTarget | null>(null);
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
@@ -325,17 +373,22 @@ export default function Home() {
   ]);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const terminalOutputRef = useRef<HTMLDivElement | null>(null);
 
   const tracks = useMemo(
     () => [
-      { title: "Idle Sequence", artist: "Freshdesk Studio", cover: ALBUM_ORBIT, time: "2:30" },
-      { title: "Silver Tide", artist: "Freshdesk Studio", cover: ALBUM_TIDE, time: "2:30" },
+      { title: "Idle Sequence", artist: "Freshdesk Studio", cover: ALBUM_ORBIT, time: "2:30", src: MUSIC },
+      { title: "Morning Window", artist: "Freshdesk Studio", cover: WALLPAPER_ALPINE, time: "2:30", src: MUSIC_MORNING },
+      { title: "Night Orbit", artist: "Freshdesk Studio", cover: ALBUM_TIDE, time: "2:30", src: MUSIC_NIGHT },
     ],
     [],
   );
 
   const current = tracks[currentTrack];
   const activeBrowserTab = browserTabs.find((tab) => tab.id === activeBrowserTabId) ?? browserTabs[0];
+  const activeWallpaper = wallpapers.find((wallpaper) => wallpaper.id === activeWallpaperId) ?? wallpapers[0];
+  const activeNote = notes.find((item) => item.id === activeNoteId) ?? notes[0];
+  const selectedPhoto = photoItems.find((item) => item.id === selectedPhotoId) ?? null;
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 15_000);
@@ -345,6 +398,16 @@ export default function Home() {
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume / 100;
   }, [volume]);
+
+  useEffect(() => {
+    const player = audioRef.current;
+    if (!player || !isPlaying) return;
+    player.play().catch(() => setIsPlaying(false));
+  }, [currentTrack, isPlaying]);
+
+  useEffect(() => {
+    if (terminalOutputRef.current) terminalOutputRef.current.scrollTop = terminalOutputRef.current.scrollHeight;
+  }, [terminalLines]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -569,6 +632,46 @@ export default function Home() {
     }
   };
 
+  const createNote = () => {
+    const id = `note-${Date.now()}`;
+    const created: NoteDocument = { id, title: "未命名便笺", body: "从这里开始记录。", updated: "刚刚" };
+    setNotes((items) => [created, ...items]);
+    setActiveNoteId(id);
+  };
+
+  const updateActiveNote = (changes: Partial<Pick<NoteDocument, "title" | "body">>) => {
+    setNotes((items) => items.map((item) => item.id === activeNote.id ? { ...item, ...changes, updated: "刚刚" } : item));
+  };
+
+  const runTerminalCommand = (event: FormEvent) => {
+    event.preventDefault();
+    const raw = terminalInput.trim();
+    if (!raw) return;
+    const [command, ...args] = raw.split(/\s+/);
+    const argument = args.join(" ");
+    const prompt = `freshdesk@desktop:${terminalCwd}$ ${raw}`;
+    if (command === "clear") {
+      setTerminalLines([]);
+      setTerminalInput("");
+      return;
+    }
+    let output: string[];
+    if (command === "help") output = ["可用命令：help, ls, cd, pwd, echo, whoami, date, clear"];
+    else if (command === "ls") output = terminalCwd === "~/Desktop" ? ["我的文件    灵感相册    开机笔记"] : terminalCwd === "~/Documents" ? ["项目草稿    收集箱    工作流.md"] : ["Desktop    Documents    Music    Pictures    README.md"];
+    else if (command === "pwd") output = [terminalCwd === "~" ? "/Users/freshdesk" : `/Users/freshdesk/${terminalCwd.replace("~/", "")}`];
+    else if (command === "whoami") output = ["freshdesk"];
+    else if (command === "date") output = [new Date().toLocaleString("zh-CN")];
+    else if (command === "echo") output = [argument];
+    else if (command === "cd") {
+      const target = argument || "~";
+      const locations: Record<string, string> = { "~": "~", ".": terminalCwd, "..": "~", Desktop: "~/Desktop", Documents: "~/Documents", Music: "~/Music", Pictures: "~/Pictures" };
+      if (locations[target]) { setTerminalCwd(locations[target]); output = []; }
+      else output = [`cd: no such directory: ${target}`];
+    } else output = [`${command}: command not found`, "输入 help 查看可用命令。"];
+    setTerminalLines((lines) => [...lines, prompt, ...output]);
+    setTerminalInput("");
+  };
+
   const currentTime = now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
   const currentDate = now.toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "short" });
 
@@ -580,16 +683,16 @@ export default function Home() {
 
   return (
     <main className={`desktop-stage ${systemAppearance === "dark" ? "desktop-dark" : "desktop-light"} ${snapPreview ? `snap-preview-${snapPreview}` : ""}`} onClick={() => { setSelectedDesktop(null); if (activePanel !== "about") setActivePanel(null); }}>
-      <div className="wallpaper" style={{ backgroundImage: `url(${WALLPAPER})` }} />
+      <div className="wallpaper" style={{ backgroundImage: `url(${activeWallpaper.src})` }} />
       <div className="wallpaper-veil" />
       {snapPreview && <div className={`desktop-snap-preview desktop-snap-${snapPreview}`}><span>{snapLabel(snapPreview)}</span></div>}
       <audio
         ref={audioRef}
-        src={MUSIC}
+        src={current.src}
         preload="metadata"
         onTimeUpdate={(event) => setProgress(event.currentTarget.currentTime)}
         onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 150)}
-        onEnded={() => { setIsPlaying(false); setProgress(0); }}
+        onEnded={() => skipTrack(1)}
       />
 
       <header className="system-menubar" onClick={(event) => event.stopPropagation()}>
@@ -688,7 +791,7 @@ export default function Home() {
                   <div className="album-row">
                     {tracks.map((track, index) => <button className={`album-tile ${index === currentTrack ? "active" : ""}`} key={track.title} onClick={() => { setCurrentTrack(index); setProgress(0); openApp("music"); }}><img src={track.cover} alt="" /><strong>{track.title}</strong><span>{track.artist}</span></button>)}
                   </div>
-                  <div className="track-list"><button onClick={playMusic}><span className="track-index">{isPlaying ? <Pause size={12} fill="currentColor" /> : <Play size={12} fill="currentColor" />}</span><img src={current.cover} alt="" /><div><strong>{current.title}</strong><span>{current.artist}</span></div><span>{current.time}</span><MoreHorizontal size={18} /></button></div>
+                  <div className="track-list">{tracks.map((track, index) => <button key={track.title} onClick={() => { setCurrentTrack(index); setProgress(0); if (!isPlaying) playMusic(); }}><span className="track-index">{index === currentTrack && isPlaying ? <Pause size={12} fill="currentColor" /> : <Play size={12} fill="currentColor" />}</span><img src={track.cover} alt="" /><div><strong>{track.title}</strong><span>{track.artist}</span></div><span>{track.time}</span><MoreHorizontal size={18} /></button>)}</div>
                 </div>
               </div>
               <div className="music-player"><img src={current.cover} alt="" /><div className="player-track"><strong>{current.title}</strong><span>{current.artist}</span><input aria-label="播放进度" type="range" min={0} max={duration || 150} value={progress} onChange={(event) => { const value = Number(event.target.value); setProgress(value); if (audioRef.current) audioRef.current.currentTime = value; }} /></div><span className="player-time">{formatDuration(progress)} / {formatDuration(duration)}</span><div className="player-controls"><button aria-label="上一首" onClick={() => skipTrack(-1)}><ChevronLeft size={18} /></button><button className="main-play" aria-label={isPlaying ? "暂停" : "播放"} onClick={playMusic}>{isPlaying ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}</button><button aria-label="下一首" onClick={() => skipTrack(1)}><ChevronRight size={18} /></button></div><Volume2 size={16} /><input className="volume-slider" aria-label="音量" type="range" min={0} max={100} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></div>
@@ -697,19 +800,19 @@ export default function Home() {
 
           {windowItem.id === "notes" && (
             <WindowChrome title="便笺" appWindow={windowItem} onClose={() => closeApp("notes")} onMinimize={() => minimizeApp("notes")} onFocus={() => bringToFront("notes")} onMaximize={() => toggleMaximize("notes")} onBoundsChange={(bounds) => updateWindowBounds("notes", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("notes", side)} className="notes-window">
-              <div className="notes-body"><aside className="notes-sidebar"><button className="new-note"><Plus size={16} /> 新建便笺</button><p>今天</p><button className="note-list-item active"><span>新桌面的第一天</span><small>今天</small></button><button className="note-list-item"><span>要尝试的事</span><small>昨天</small></button><button className="note-list-item"><span>给未来的提醒</span><small>8 月 14 日</small></button></aside><article className="note-editor"><header><div><h2>新桌面的第一天</h2><span>{currentDate} · 已自动存储</span></div><button aria-label="更多选项"><MoreHorizontal size={19} /></button></header><textarea value={note} onChange={(event) => setNote(event.target.value)} aria-label="编辑便笺" /><footer><span>⌘S 自动储存</span><span>{note.length} 个字符</span></footer></article></div>
+              <div className="notes-body"><aside className="notes-sidebar"><button className="new-note" onClick={createNote}><Plus size={16} /> 新建便笺</button><p>便笺</p>{notes.map((item) => <button className={`note-list-item ${item.id === activeNote.id ? "active" : ""}`} key={item.id} onClick={() => setActiveNoteId(item.id)}><span>{item.title || "未命名便笺"}</span><small>{item.updated}</small></button>)}</aside><article className="note-editor"><header><div><input className="note-title-input" value={activeNote.title} onChange={(event) => updateActiveNote({ title: event.target.value })} aria-label="便笺标题" /><span>{currentDate} · 已自动存储</span></div><button aria-label="新建便笺" onClick={createNote}><FilePlus2 size={18} /></button></header><textarea value={activeNote.body} onChange={(event) => updateActiveNote({ body: event.target.value })} aria-label="编辑便笺" /><footer><span>⌘S 自动储存</span><span>{activeNote.body.length} 个字符</span></footer></article></div>
             </WindowChrome>
           )}
 
           {windowItem.id === "photos" && (
             <WindowChrome title="灵感相册" appWindow={windowItem} onClose={() => closeApp("photos")} onMinimize={() => minimizeApp("photos")} onFocus={() => bringToFront("photos")} onMaximize={() => toggleMaximize("photos")} onBoundsChange={(bounds) => updateWindowBounds("photos", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("photos", side)} className="photos-window">
-              <div className="photos-body"><header><div><span className="eyebrow">灵感相册</span><h2>光线留下的痕迹。</h2></div><button><Search size={17} /> 搜索</button></header><div className="photo-mosaic"><img src={WALLPAPER} alt="晨雾壁纸" /><img src={ALBUM_ORBIT} alt="蓝色球体" /><img src={ALBUM_TIDE} alt="丝绸材质" /><div className="mosaic-caption"><Sparkles size={17} /><span>最近添加<br /><b>3 个片段</b></span></div></div><p>这是一个为新桌面准备的私密视觉收藏夹。双击桌面上的“灵感相册”可随时回来。</p></div>
+              <div className="photos-body">{selectedPhoto ? <div className="photo-viewer"><button className="photo-back" onClick={() => setSelectedPhotoId(null)}><ChevronLeft size={16} /> 所有照片</button><img src={selectedPhoto.src} alt={selectedPhoto.alt} /><div><span className="eyebrow">已打开</span><h2>{selectedPhoto.title}</h2><p>{selectedPhoto.subtitle} · 可在“桌面与外观”中设为壁纸。</p></div></div> : <><header><div><span className="eyebrow">灵感相册</span><h2>光线留下的痕迹。</h2></div><button><Search size={17} /> 搜索</button></header><div className="photo-mosaic">{photoItems.slice(0, 4).map((photo) => <button key={photo.id} className="photo-tile" onClick={() => setSelectedPhotoId(photo.id)}><img src={photo.src} alt={photo.alt} /><span>{photo.title}</span></button>)}<button className="mosaic-caption" onClick={() => setSelectedPhotoId("alpine")}><Sparkles size={17} /><span>最近添加<br /><b>2 张壁纸</b></span></button></div><p>点开任意照片可查看大图；其中的原创壁纸也可直接在设置中更换。</p></>}</div>
             </WindowChrome>
           )}
 
           {windowItem.id === "settings" && (
             <WindowChrome title="设置" appWindow={windowItem} onClose={() => closeApp("settings")} onMinimize={() => minimizeApp("settings")} onFocus={() => bringToFront("settings")} onMaximize={() => toggleMaximize("settings")} onBoundsChange={(bounds) => updateWindowBounds("settings", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("settings", side)} className="settings-window">
-              <div className="settings-body"><aside className="settings-sidebar"><div className="settings-profile"><img src={BRAND_MARK} alt="" /><div><strong>你的工作空间</strong><span>本机帐户</span></div></div><button className="settings-active"><Wifi size={16} /> Wi‑Fi</button><button><Bluetooth size={16} /> 蓝牙</button><button><Moon size={16} /> 专注模式</button><button><Gauge size={16} /> 桌面与外观</button></aside><section className="settings-content"><header><h2>桌面与外观</h2><p>按照此刻的光线调整你的工作空间。</p></header><div className="setting-block"><div><strong>外观</strong><span>让系统界面与壁纸保持平衡。</span></div><div className="appearance-choice"><button className={systemAppearance === "light" ? "chosen" : ""} onClick={() => setSystemAppearance("light")}><span className="light-preview" />浅色</button><button className={systemAppearance === "dark" ? "chosen" : ""} onClick={() => setSystemAppearance("dark")}><span className="dark-preview" />深色</button></div></div><div className="setting-block"><div><strong>新手引导</strong><span>重新查看欢迎界面和桌面提示。</span></div><button className="soft-action" onClick={() => { setSetupComplete(false); setShowSetupChoice(false); }}>再次打开</button></div><div className="setting-block"><div><strong>音量</strong><span>当前输出：内建扬声器</span></div><input aria-label="系统音量" type="range" min={0} max={100} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></div></section></div>
+              <div className="settings-body"><aside className="settings-sidebar"><div className="settings-profile"><img src={BRAND_MARK} alt="" /><div><strong>你的工作空间</strong><span>本机帐户</span></div></div><button className="settings-active"><Wifi size={16} /> Wi‑Fi</button><button><Bluetooth size={16} /> 蓝牙</button><button><Moon size={16} /> 专注模式</button><button><Gauge size={16} /> 桌面与外观</button></aside><section className="settings-content"><header><h2>桌面与外观</h2><p>按照此刻的光线调整你的工作空间。</p></header><div className="setting-block"><div><strong>外观</strong><span>让系统界面与壁纸保持平衡。</span></div><div className="appearance-choice"><button className={systemAppearance === "light" ? "chosen" : ""} onClick={() => setSystemAppearance("light")}><span className="light-preview" />浅色</button><button className={systemAppearance === "dark" ? "chosen" : ""} onClick={() => setSystemAppearance("dark")}><span className="dark-preview" />深色</button></div></div><div className="setting-block wallpaper-block"><div><strong><Palette size={13} /> 桌面壁纸</strong><span>选择一张原创背景，立即应用到桌面。</span></div><div className="wallpaper-options">{wallpapers.map((wallpaper) => <button key={wallpaper.id} className={activeWallpaperId === wallpaper.id ? "selected" : ""} onClick={() => setActiveWallpaperId(wallpaper.id)}><img src={wallpaper.src} alt="" /><span>{wallpaper.title}</span></button>)}</div></div><div className="setting-block"><div><strong>新手引导</strong><span>重新查看欢迎界面和桌面提示。</span></div><button className="soft-action" onClick={() => { setSetupComplete(false); setShowSetupChoice(false); }}>再次打开</button></div><div className="setting-block"><div><strong>音量</strong><span>当前输出：内建扬声器</span></div><input aria-label="系统音量" type="range" min={0} max={100} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></div></section></div>
             </WindowChrome>
           )}
 
@@ -737,8 +840,8 @@ export default function Home() {
                   <span className="browser-status">{activeBrowserTab.loading ? "正在连接" : "浏览器"}</span>
                 </form>
                 <div className="browser-frame-wrap">
-                  <iframe key={`${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 浏览器内容" src={activeBrowserTab.url} referrerPolicy="strict-origin-when-cross-origin" onLoad={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} />
-                  <div className="browser-frame-note"><CircleHelp size={13} /><span>默认在此直接浏览；若目标网站主动禁止嵌入，浏览器会保留安全提示。</span></div>
+                  <iframe key={`${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 浏览器内容" src={activeBrowserTab.url} sandbox="allow-forms allow-scripts allow-same-origin" referrerPolicy="strict-origin-when-cross-origin" onLoad={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} />
+                  <div className="browser-frame-note"><CircleHelp size={13} /><span>网页始终保留在此窗口内；外部弹窗会被阻止。少数网站若拒绝 iframe 嵌入，可能无法显示。</span></div>
                   {bookmarksOpen && <aside className="bookmark-drawer"><header><div><Bookmark size={15} /><span>收藏夹</span></div><button aria-label="关闭收藏夹" onClick={() => setBookmarksOpen(false)}><X size={14} /></button></header>{bookmarks.length ? <div className="bookmark-list">{bookmarks.map((bookmark) => <button key={bookmark.id} onClick={() => openBookmark(bookmark)}><Globe2 size={14} /><span><b>{bookmark.title}</b><small>{labelFromUrl(bookmark.url)}</small></span></button>)}</div> : <div className="bookmark-empty"><Bookmark size={18} /><span>还没有收藏的页面</span></div>}</aside>}
                   {groupsOpen && <aside className="group-drawer"><header><div><LayoutGrid size={15} /><span>标签页分组</span></div><button aria-label="关闭标签分组" onClick={() => setGroupsOpen(false)}><X size={14} /></button></header><div className="group-drawer-actions"><button onClick={createTabGroup}><Plus size={14} /> 用当前标签新建分组</button><button onClick={() => assignTabToGroup(undefined)} disabled={!activeBrowserTab.groupId}><X size={14} /> 移出当前分组</button></div><div className="group-drawer-list">{browserTabGroups.length ? browserTabGroups.map((group) => <section key={group.id}><div className="group-drawer-row"><i style={{ background: group.color }} /><input value={group.title} aria-label="分组名称" onChange={(event) => renameGroup(group.id, event.target.value)} onBlur={(event) => { if (!event.target.value.trim()) renameGroup(group.id, "未命名分组"); }} /><button aria-label={`将当前标签移入 ${group.title}`} onClick={() => assignTabToGroup(group.id)}><ChevronRight size={13} /></button><button aria-label={`删除 ${group.title}`} onClick={() => removeTabGroup(group.id)}><Trash2 size={12} /></button></div><small>{groupedTabs(group.id).length} 个标签页 · 拖放标签也可加入</small></section>) : <div className="group-empty"><LayoutGrid size={18} /><span>先从当前标签创建一个工作组</span></div>}</div></aside>}
                 </div>
@@ -748,7 +851,7 @@ export default function Home() {
 
           {windowItem.id === "terminal" && (
             <WindowChrome title="终端" appWindow={windowItem} onClose={() => closeApp("terminal")} onMinimize={() => minimizeApp("terminal")} onFocus={() => bringToFront("terminal")} onMaximize={() => toggleMaximize("terminal")} onBoundsChange={(bounds) => updateWindowBounds("terminal", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("terminal", side)} className="terminal-window">
-              <div className="terminal-body"><p><span className="term-cyan">freshdesk@desktop</span>:<span className="term-blue">~</span>$ system.ready</p><p>Workspace initialized · 7 applications available</p><p>Browser engine connected · iframe sandbox active</p><p><span className="term-cyan">freshdesk@desktop</span>:<span className="term-blue">~</span>$ <span className="cursor">▍</span></p></div>
+              <div className="terminal-body"><div className="terminal-scroll" ref={terminalOutputRef}>{terminalLines.map((line, index) => <p key={`${line}-${index}`} className={line.startsWith("freshdesk@desktop") ? "terminal-command" : ""}>{line.startsWith("freshdesk@desktop") ? <><span className="term-cyan">freshdesk@desktop</span>:<span className="term-blue">{terminalCwd}</span>$ {line.split("$ ").at(-1)}</> : line}</p>)}</div><form className="terminal-input-row" onSubmit={runTerminalCommand}><span><b className="term-cyan">freshdesk@desktop</b>:<b className="term-blue">{terminalCwd}</b>$</span><input autoFocus value={terminalInput} onChange={(event) => setTerminalInput(event.target.value)} aria-label="输入模拟终端命令" placeholder="试试 ls、cd、echo 或 help" /><button type="submit">运行</button></form></div>
             </WindowChrome>
           )}
         </div>
