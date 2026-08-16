@@ -56,7 +56,7 @@ import {
   X,
 } from "lucide-react";
 
-type AppName = "finder" | "music" | "notes" | "photos" | "settings" | "terminal" | "browser" | "weather" | "calendar" | "reminders";
+type AppName = "finder" | "music" | "notes" | "photos" | "settings" | "terminal" | "browser" | "weather" | "calendar" | "reminders" | "trash";
 
 type WindowBounds = {
   x: number;
@@ -78,6 +78,18 @@ type BrowserTab = {
   reloadNonce: number;
   pinned: boolean;
   groupId?: string;
+  mode?: "web" | "search" | "reader";
+  searchQuery?: string;
+  searchResults?: BrowserSearchResult[];
+  searchSummary?: string;
+  searchError?: string;
+};
+
+type BrowserSearchResult = {
+  title: string;
+  url: string;
+  snippet: string;
+  source?: string;
 };
 
 type BrowserTabGroup = {
@@ -111,6 +123,21 @@ type PhotoItem = {
 type VirtualFileSystem = {
   directories: string[];
   files: string[];
+};
+
+type VirtualTrashItem = {
+  id: string;
+  path: string;
+  type: "file";
+  deletedAt: string;
+};
+
+type LiveWeather = WeatherLocation & {
+  latitude: number;
+  longitude: number;
+  timezone: string;
+  apparent: number;
+  source: "live";
 };
 
 type CalendarEntry = {
@@ -227,6 +254,7 @@ const appMeta: Record<AppName, { label: string; color: string; icon: typeof Fold
   weather: { label: "天气", color: "#4c9eff", icon: CloudSun },
   calendar: { label: "日历", color: "#f35f67", icon: CalendarDays },
   reminders: { label: "提醒", color: "#ff9d4e", icon: ListTodo },
+  trash: { label: "回收站", color: "#4b5361", icon: Trash2 },
 };
 
 const defaultWindowBounds: Record<AppName, WindowBounds> = {
@@ -240,6 +268,7 @@ const defaultWindowBounds: Record<AppName, WindowBounds> = {
   weather: { x: 360, y: 78, width: 620, height: 500 },
   calendar: { x: 330, y: 74, width: 680, height: 505 },
   reminders: { x: 420, y: 92, width: 570, height: 455 },
+  trash: { x: 430, y: 112, width: 540, height: 420 },
 };
 
 function formatDuration(value: number) {
@@ -450,11 +479,13 @@ export default function Home() {
   const [terminalInput, setTerminalInput] = useState("");
   const [terminalCwd, setTerminalCwd] = useState(VIRTUAL_HOME);
   const [virtualFileSystem, setVirtualFileSystem] = useState<VirtualFileSystem>(initialVirtualFileSystem);
+  const [trashItems, setTrashItems] = useState<VirtualTrashItem[]>([]);
+  const [draggedFilePath, setDraggedFilePath] = useState<string | null>(null);
   const [systemAppearance, setSystemAppearance] = useState<"light" | "dark">("dark");
   const [snapPreview, setSnapPreview] = useState<SnapTarget | null>(null);
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>([
-    { id: "welcome", title: "Example Domain", address: "https://example.com", url: "https://example.com", history: ["https://example.com"], historyIndex: 0, loading: false, reloadNonce: 0, pinned: true },
+    { id: "welcome", title: "新标签页", address: "", url: "about:blank", history: ["about:blank"], historyIndex: 0, loading: false, reloadNonce: 0, pinned: true, mode: "search" },
   ]);
   const [activeBrowserTabId, setActiveBrowserTabId] = useState("welcome");
   const [browserTabGroups, setBrowserTabGroups] = useState<BrowserTabGroup[]>([]);
@@ -467,6 +498,10 @@ export default function Home() {
   const [weatherLocationId, setWeatherLocationId] = useState("shanghai");
   const [weatherUnit, setWeatherUnit] = useState<"c" | "f">("c");
   const [weatherUpdatedAt, setWeatherUpdatedAt] = useState(() => new Date());
+  const [liveWeather, setLiveWeather] = useState<LiveWeather | null>(null);
+  const [weatherSearch, setWeatherSearch] = useState("");
+  const [weatherLoading, setWeatherLoading] = useState(false);
+  const [weatherError, setWeatherError] = useState("");
   const [calendarEntries, setCalendarEntries] = useState<CalendarEntry[]>([
     { id: "morning", title: "晨间梳理", time: "09:00", color: "#6fa8ff" },
     { id: "review", title: "界面回顾", time: "15:00", color: "#ee7b91" },
@@ -495,11 +530,67 @@ export default function Home() {
   const activeWallpaper = wallpapers.find((wallpaper) => wallpaper.id === activeWallpaperId) ?? wallpapers[0];
   const activeNote = notes.find((item) => item.id === activeNoteId) ?? notes[0];
   const selectedPhoto = photoItems.find((item) => item.id === selectedPhotoId) ?? null;
-  const currentWeather = weatherLocations.find((location) => location.id === weatherLocationId) ?? weatherLocations[0];
+  const currentWeather = liveWeather ?? weatherLocations.find((location) => location.id === weatherLocationId) ?? weatherLocations[0];
   const completedReminders = reminders.filter((item) => item.done).length;
+  const finderEntries = virtualDirectoryEntries(virtualFileSystem, VIRTUAL_HOME);
 
   const temperature = (value: number) => weatherUnit === "c" ? `${value}°` : `${Math.round(value * 9 / 5 + 32)}°`;
   const weatherSymbol = (icon: "sun" | "cloud" | "partly", size = 18) => icon === "sun" ? <Sun size={size} /> : icon === "cloud" ? <Cloud size={size} /> : <CloudSun size={size} />;
+  const weatherCodeInfo = (code: number) => {
+    if ([0, 1].includes(code)) return { condition: "晴朗", icon: "sun" as const };
+    if ([2, 3].includes(code)) return { condition: "局部多云", icon: "partly" as const };
+    if ([45, 48].includes(code)) return { condition: "有雾", icon: "cloud" as const };
+    if ([51, 53, 55, 56, 57, 61, 63, 65, 80, 81, 82].includes(code)) return { condition: "有雨", icon: "cloud" as const };
+    if ([71, 73, 75, 77, 85, 86].includes(code)) return { condition: "有雪", icon: "cloud" as const };
+    if ([95, 96, 99].includes(code)) return { condition: "雷雨", icon: "cloud" as const };
+    return { condition: "多云", icon: "partly" as const };
+  };
+
+  const moveFileToTrash = (path: string) => {
+    if (!virtualFileSystem.files.includes(path)) return;
+    setVirtualFileSystem((fileSystem) => ({ ...fileSystem, files: fileSystem.files.filter((file) => file !== path) }));
+    setTrashItems((items) => [{ id: `trash-${Date.now()}`, path, type: "file", deletedAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) }, ...items]);
+    setDraggedFilePath(null);
+  };
+
+  const restoreTrashItem = (item: VirtualTrashItem) => {
+    setVirtualFileSystem((fileSystem) => fileSystem.files.includes(item.path) ? fileSystem : { ...fileSystem, files: [...fileSystem.files, item.path] });
+    setTrashItems((items) => items.filter((entry) => entry.id !== item.id));
+  };
+
+  const fetchLiveWeather = async (rawCity = weatherSearch) => {
+    const city = rawCity.trim();
+    if (!city) { setWeatherError("请输入城市名称，例如：上海、北京或 Tokyo。"); return; }
+    setWeatherLoading(true);
+    setWeatherError("");
+    try {
+      const geocodeResponse = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=zh&format=json`);
+      if (!geocodeResponse.ok) throw new Error("地理编码请求失败");
+      const geocode = await geocodeResponse.json() as { results?: { id: number; name: string; country?: string; latitude: number; longitude: number; timezone: string }[] };
+      const location = geocode.results?.[0];
+      if (!location) throw new Error("未找到该城市");
+      const weatherResponse = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&hourly=temperature_2m,weather_code&forecast_days=1&timezone=auto`);
+      if (!weatherResponse.ok) throw new Error("天气请求失败");
+      const weather = await weatherResponse.json() as { current: { temperature_2m: number; relative_humidity_2m: number; apparent_temperature: number; weather_code: number; wind_speed_10m: number; time: string }; hourly: { time: string[]; temperature_2m: number[]; weather_code: number[] } };
+      const hourIndex = Math.max(0, weather.hourly.time.findIndex((time) => time >= weather.current.time));
+      const future = [0, 1, 2, 3].map((offset) => {
+        const index = Math.min(weather.hourly.time.length - 1, hourIndex + offset);
+        const date = new Date(weather.hourly.time[index]);
+        const info = weatherCodeInfo(weather.hourly.weather_code[index]);
+        return { label: offset === 0 ? "现在" : `${String(date.getHours()).padStart(2, "0")} 时`, icon: info.icon, temp: Math.round(weather.hourly.temperature_2m[index]) };
+      });
+      const temperatures = future.map((entry) => entry.temp);
+      const info = weatherCodeInfo(weather.current.weather_code);
+      setLiveWeather({ id: `live-${location.id}`, city: `${location.name}${location.country ? ` · ${location.country}` : ""}`, temp: Math.round(weather.current.temperature_2m), condition: info.condition, high: Math.max(...temperatures), low: Math.min(...temperatures), humidity: Math.round(weather.current.relative_humidity_2m), wind: `${Math.round(weather.current.wind_speed_10m)} km/h`, forecast: future, latitude: location.latitude, longitude: location.longitude, timezone: location.timezone, apparent: Math.round(weather.current.apparent_temperature), source: "live" });
+      setWeatherLocationId("");
+      setWeatherUpdatedAt(new Date());
+      setWeatherSearch(location.name);
+    } catch (error) {
+      setWeatherError(error instanceof Error && error.message === "未找到该城市" ? `没有找到“${city}”，请尝试加入国家或省份。` : "暂时无法获取实时天气，请检查网络后重试。");
+    } finally {
+      setWeatherLoading(false);
+    }
+  };
 
   const movePhoto = (direction: 1 | -1) => {
     if (!selectedPhotoId) return;
@@ -607,10 +698,16 @@ export default function Home() {
 
   const normalizeUrl = (value: string) => {
     const trimmed = value.trim();
-    if (!trimmed) return activeBrowserTab?.url ?? "https://example.com";
+    if (!trimmed) return activeBrowserTab?.url ?? "about:blank";
     if (/^https?:\/\//i.test(trimmed)) return trimmed;
-    if (trimmed.includes(" ")) return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
+    if (trimmed.includes(" ")) return trimmed;
     return `https://${trimmed}`;
+  };
+
+  const looksLikeSearch = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed || /^https?:\/\//i.test(trimmed)) return false;
+    return trimmed.includes(" ") || (!trimmed.includes(".") && !trimmed.includes("/") && !trimmed.includes(":"));
   };
 
   const updateActiveBrowserTab = (updater: (tab: BrowserTab) => BrowserTab) => {
@@ -619,28 +716,56 @@ export default function Home() {
 
   const updateBrowserAddress = (address: string) => updateActiveBrowserTab((tab) => ({ ...tab, address }));
 
+  const fetchBrowserSearch = async (query: string) => {
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) return;
+    updateActiveBrowserTab((tab) => ({ ...tab, title: `搜索：${normalizedQuery}`, address: normalizedQuery, mode: "search", searchQuery: normalizedQuery, searchError: "", loading: true }));
+    try {
+      const response = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(normalizedQuery)}&format=json&no_html=1&skip_disambig=1`);
+      if (!response.ok) throw new Error("搜索请求失败");
+      const result = await response.json() as { AbstractText?: string; AbstractURL?: string; AbstractSource?: string; Heading?: string; RelatedTopics?: ({ Text?: string; FirstURL?: string; Name?: string; Topics?: { Text?: string; FirstURL?: string }[] })[] };
+      const related = (result.RelatedTopics ?? []).flatMap((item) => item.Topics ?? [item]).filter((item): item is { Text?: string; FirstURL?: string } => Boolean(item.Text && item.FirstURL)).slice(0, 8).map((item) => ({ title: item.Text!.split(" - ")[0], snippet: item.Text!, url: item.FirstURL!, source: "DuckDuckGo" }));
+      const primary = result.AbstractURL ? [{ title: result.Heading || normalizedQuery, snippet: result.AbstractText || "打开此页面查看相关内容。", url: result.AbstractURL, source: result.AbstractSource || "DuckDuckGo" }] : [];
+      const searchResults = [...primary, ...related];
+      updateActiveBrowserTab((tab) => ({ ...tab, loading: false, mode: "search", searchResults, searchSummary: result.AbstractText || "已在窗口内完成搜索。选择一个结果后会在当前标签中打开。", searchError: searchResults.length ? "" : "该查询没有返回可直接展示的公开摘要。请尝试更具体的关键词，或输入完整网址。" }));
+    } catch {
+      updateActiveBrowserTab((tab) => ({ ...tab, loading: false, mode: "search", searchResults: [], searchError: "搜索暂时不可用，请检查网络后重试。" }));
+    }
+  };
+
   const navigateBrowser = (value: string) => {
+    if (looksLikeSearch(value)) { void fetchBrowserSearch(value); return; }
     const nextUrl = normalizeUrl(value);
     updateActiveBrowserTab((tab) => {
       const nextHistory = [...tab.history.slice(0, tab.historyIndex + 1), nextUrl];
-      return { ...tab, title: labelFromUrl(nextUrl), address: nextUrl, url: nextUrl, history: nextHistory, historyIndex: nextHistory.length - 1, loading: true };
+      return { ...tab, title: labelFromUrl(nextUrl), address: nextUrl, url: nextUrl, history: nextHistory, historyIndex: nextHistory.length - 1, loading: true, mode: "web", searchError: "" };
     });
   };
+
+  const openReaderMode = () => {
+    if (!activeBrowserTab || activeBrowserTab.mode !== "web" || !/^https?:\/\//i.test(activeBrowserTab.url)) return;
+    updateActiveBrowserTab((tab) => ({ ...tab, mode: "reader", loading: true, title: `阅读：${labelFromUrl(tab.url)}` }));
+  };
+
+  const openBrowserSearchResult = (result: BrowserSearchResult) => navigateBrowser(result.url);
 
   const stepBrowserHistory = (direction: -1 | 1) => {
     updateActiveBrowserTab((tab) => {
       const nextIndex = tab.historyIndex + direction;
       if (nextIndex < 0 || nextIndex >= tab.history.length) return tab;
       const nextUrl = tab.history[nextIndex];
-      return { ...tab, title: labelFromUrl(nextUrl), address: nextUrl, url: nextUrl, historyIndex: nextIndex, loading: true };
+      return { ...tab, title: labelFromUrl(nextUrl), address: nextUrl, url: nextUrl, historyIndex: nextIndex, loading: true, mode: "web", searchError: "" };
     });
   };
 
-  const refreshBrowser = () => updateActiveBrowserTab((tab) => ({ ...tab, loading: true, reloadNonce: tab.reloadNonce + 1 }));
+  const refreshBrowser = () => {
+    if (activeBrowserTab?.mode === "search") { void fetchBrowserSearch(activeBrowserTab.searchQuery ?? activeBrowserTab.address); return; }
+    updateActiveBrowserTab((tab) => ({ ...tab, loading: true, reloadNonce: tab.reloadNonce + 1 }));
+  };
 
-  const addBrowserTab = (url = "https://example.com") => {
+  const addBrowserTab = (url = "about:blank") => {
     const id = `tab-${Date.now()}`;
-    const nextTab: BrowserTab = { id, title: labelFromUrl(url), address: url, url, history: [url], historyIndex: 0, loading: false, reloadNonce: 0, pinned: false };
+    const nextTab: BrowserTab = { id, title: "新标签页", address: "", url, history: [url], historyIndex: 0, loading: false, reloadNonce: 0, pinned: false, mode: "search" };
     setBrowserTabs((tabs) => [...tabs, nextTab]);
     setActiveBrowserTabId(id);
     setBookmarksOpen(false);
@@ -649,7 +774,7 @@ export default function Home() {
   const closeBrowserTab = (id: string) => {
     const currentIndex = browserTabs.findIndex((tab) => tab.id === id);
     if (browserTabs.length === 1) {
-      const replacement: BrowserTab = { id: `tab-${Date.now()}`, title: "新标签页", address: "https://example.com", url: "https://example.com", history: ["https://example.com"], historyIndex: 0, loading: false, reloadNonce: 0, pinned: false };
+      const replacement: BrowserTab = { id: `tab-${Date.now()}`, title: "新标签页", address: "", url: "about:blank", history: ["about:blank"], historyIndex: 0, loading: false, reloadNonce: 0, pinned: false, mode: "search" };
       setBrowserTabs([replacement]);
       setActiveBrowserTabId(replacement.id);
       return;
@@ -726,7 +851,7 @@ export default function Home() {
     if (!activeBrowserTab) return;
     updateActiveBrowserTab((tab) => {
       const nextHistory = [...tab.history.slice(0, tab.historyIndex + 1), bookmark.url];
-      return { ...tab, title: bookmark.title, address: bookmark.url, url: bookmark.url, history: nextHistory, historyIndex: nextHistory.length - 1, loading: true };
+      return { ...tab, title: bookmark.title, address: bookmark.url, url: bookmark.url, history: nextHistory, historyIndex: nextHistory.length - 1, loading: true, mode: "web", searchError: "" };
     });
     setBookmarksOpen(false);
   };
@@ -931,18 +1056,19 @@ export default function Home() {
                   <button><CloudSun size={15} /> Freshdesk Drive</button>
                 </aside>
                 <div className="finder-content">
-                  <div className="finder-toolbar"><div><ChevronLeft size={17} /><ChevronRight size={17} /></div><strong>我的文件</strong><LayoutGrid size={17} /></div>
-                  <div className="folder-grid">
-                    {["项目草稿", "收集箱", "回声", "素材库", "导出"].map((folder, index) => (
-                      <button key={folder} className="folder-card" onClick={() => index === 2 ? openApp("notes") : undefined}>
-                        <Folder size={44} fill={index === 1 ? "#8dbaff" : "#a4c8ff"} strokeWidth={1.2} />
-                        <strong>{folder}</strong><span>{index === 2 ? "3 个文件" : `${index + 2} 个项目`}</span>
-                      </button>
-                    ))}
+                  <div className="finder-toolbar"><div><ChevronLeft size={17} /><ChevronRight size={17} /></div><strong>我的文件</strong><span className="finder-toolbar-note">拖动文件到 Dock 的回收站</span><LayoutGrid size={17} /></div>
+                  <div className="folder-grid finder-grid">
+                    {finderEntries.map((entry) => entry.type === "directory" ? <button key={entry.name} className="folder-card" onDoubleClick={() => entry.name === "Desktop" ? openApp("notes") : undefined}><Folder size={44} fill="#a4c8ff" strokeWidth={1.2} /><strong>{entry.name}</strong><span>文件夹</span></button> : <button key={entry.name} className="folder-card finder-file-card" draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; setDraggedFilePath(`${VIRTUAL_HOME}/${entry.name}`); }} onDragEnd={() => setDraggedFilePath(null)}><FilePlus2 size={38} strokeWidth={1.35} /><strong>{entry.name}</strong><span>可拖到回收站</span></button>)}
                   </div>
-                  <div className="finder-footer"><span>5 个项目</span><span>Freshdesk Drive · 已连接</span></div>
+                  <div className="finder-footer"><span>{finderEntries.length} 个项目</span><span>拖放删除 · 可从回收站恢复</span></div>
                 </div>
               </div>
+            </WindowChrome>
+          )}
+
+          {windowItem.id === "trash" && (
+            <WindowChrome title="回收站" appWindow={windowItem} onClose={() => closeApp("trash")} onMinimize={() => minimizeApp("trash")} onFocus={() => bringToFront("trash")} onMaximize={() => toggleMaximize("trash")} onBoundsChange={(bounds) => updateWindowBounds("trash", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("trash", side)} className="trash-window">
+              <div className="trash-body"><header><div><span className="eyebrow">文件恢复中心</span><h2>回收站</h2><p>{trashItems.length ? "文件会暂留在这里，直到你主动清空。" : "目前没有已删除文件。"}</p></div><button className="trash-empty" disabled={!trashItems.length} onClick={() => setTrashItems([])}><Trash2 size={14} /> 清空回收站</button></header>{trashItems.length ? <div className="trash-list">{trashItems.map((item) => <article key={item.id}><div className="trash-file-icon"><FilePlus2 size={21} /></div><div><strong>{virtualName(item.path)}</strong><span>{displayVirtualPath(virtualParent(item.path))} · {item.deletedAt} 删除</span></div><button onClick={() => restoreTrashItem(item)}><RotateCw size={14} /> 恢复</button></article>)}</div> : <div className="trash-empty-state"><Trash2 size={34} /><strong>回收站是空的</strong><span>在“我的文件”中把文件拖到 Dock 的回收站即可删除。</span></div>}</div>
             </WindowChrome>
           )}
 
@@ -1005,8 +1131,7 @@ export default function Home() {
                   <span className="browser-status">{activeBrowserTab.loading ? "正在连接" : "浏览器"}</span>
                 </form>
                 <div className="browser-frame-wrap">
-                  <iframe key={`${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 浏览器内容" src={activeBrowserTab.url} sandbox="allow-forms allow-scripts allow-same-origin" referrerPolicy="strict-origin-when-cross-origin" onLoad={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} />
-                  <div className="browser-frame-note"><CircleHelp size={13} /><span>网页始终保留在此窗口内；外部弹窗会被阻止。少数网站若拒绝 iframe 嵌入，可能无法显示。</span></div>
+                  {activeBrowserTab.mode === "search" ? <section className="browser-search-page"><header><span className="eyebrow">Freshdesk Search</span><h2>{activeBrowserTab.searchQuery ? `“${activeBrowserTab.searchQuery}”` : "在这里搜索互联网"}</h2><p>{activeBrowserTab.searchError || activeBrowserTab.searchSummary || "输入关键词，搜索结果会保留在当前浏览器窗口中。"}</p></header>{activeBrowserTab.loading ? <div className="browser-search-loading"><RotateCw className="spinning" size={18} /> 正在检索公开摘要…</div> : activeBrowserTab.searchResults?.length ? <div className="browser-search-results">{activeBrowserTab.searchResults.map((result) => <button key={`${result.url}-${result.title}`} onClick={() => openBrowserSearchResult(result)}><span className="browser-result-top"><Globe2 size={14} /> {result.source ?? labelFromUrl(result.url)}</span><strong>{result.title}</strong><p>{result.snippet}</p><small>{labelFromUrl(result.url)}</small></button>)}</div> : <div className="browser-search-empty"><Compass size={28} /><strong>等待一个搜索词</strong><span>可输入“OpenAI”“北京天气”或任何带空格的查询；完整网址会在当前标签中直接打开。</span></div>}</section> : <><iframe key={`${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}-${activeBrowserTab.mode}`} title="Freshdesk 浏览器内容" src={activeBrowserTab.mode === "reader" ? `https://r.jina.ai/${activeBrowserTab.url}` : activeBrowserTab.url} sandbox="allow-forms allow-scripts allow-same-origin" referrerPolicy="strict-origin-when-cross-origin" onLoad={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} /><div className="browser-frame-note"><CircleHelp size={13} /><span>{activeBrowserTab.mode === "reader" ? "兼容阅读模式会在当前窗口显示页面正文；返回直连可恢复原网页尝试。" : "网页始终留在当前窗口；外部弹窗已阻止。若网页拒绝嵌入，可切换兼容阅读。"}</span><button onClick={() => activeBrowserTab.mode === "reader" ? updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", loading: true })) : openReaderMode()}>{activeBrowserTab.mode === "reader" ? "返回直连" : "兼容阅读"}</button></div></>}
                   {bookmarksOpen && <aside className="bookmark-drawer"><header><div><Bookmark size={15} /><span>收藏夹</span></div><button aria-label="关闭收藏夹" onClick={() => setBookmarksOpen(false)}><X size={14} /></button></header>{bookmarks.length ? <div className="bookmark-list">{bookmarks.map((bookmark) => <button key={bookmark.id} onClick={() => openBookmark(bookmark)}><Globe2 size={14} /><span><b>{bookmark.title}</b><small>{labelFromUrl(bookmark.url)}</small></span></button>)}</div> : <div className="bookmark-empty"><Bookmark size={18} /><span>还没有收藏的页面</span></div>}</aside>}
                   {groupsOpen && <aside className="group-drawer"><header><div><LayoutGrid size={15} /><span>标签页分组</span></div><button aria-label="关闭标签分组" onClick={() => setGroupsOpen(false)}><X size={14} /></button></header><div className="group-drawer-actions"><button onClick={createTabGroup}><Plus size={14} /> 用当前标签新建分组</button><button onClick={() => assignTabToGroup(undefined)} disabled={!activeBrowserTab.groupId}><X size={14} /> 移出当前分组</button></div><div className="group-drawer-list">{browserTabGroups.length ? browserTabGroups.map((group) => <section key={group.id}><div className="group-drawer-row"><i style={{ background: group.color }} /><input value={group.title} aria-label="分组名称" onChange={(event) => renameGroup(group.id, event.target.value)} onBlur={(event) => { if (!event.target.value.trim()) renameGroup(group.id, "未命名分组"); }} /><button aria-label={`将当前标签移入 ${group.title}`} onClick={() => assignTabToGroup(group.id)}><ChevronRight size={13} /></button><button aria-label={`删除 ${group.title}`} onClick={() => removeTabGroup(group.id)}><Trash2 size={12} /></button></div><small>{groupedTabs(group.id).length} 个标签页 · 拖放标签也可加入</small></section>) : <div className="group-empty"><LayoutGrid size={18} /><span>先从当前标签创建一个工作组</span></div>}</div></aside>}
                 </div>
@@ -1016,7 +1141,7 @@ export default function Home() {
 
           {windowItem.id === "weather" && (
             <WindowChrome title="天气" appWindow={windowItem} onClose={() => closeApp("weather")} onMinimize={() => minimizeApp("weather")} onFocus={() => bringToFront("weather")} onMaximize={() => toggleMaximize("weather")} onBoundsChange={(bounds) => updateWindowBounds("weather", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("weather", side)} className="weather-window">
-              <div className="weather-body"><aside className="weather-sidebar"><div className="weather-sidebar-head"><CloudSun size={17} /><span>地点</span></div>{weatherLocations.map((location) => <button className={location.id === weatherLocationId ? "active" : ""} key={location.id} onClick={() => setWeatherLocationId(location.id)}><MapPin size={14} /><span><b>{location.city}</b><small>{temperature(location.temp)} · {location.condition}</small></span></button>)}</aside><section className="weather-content"><header><div><span className="eyebrow"><MapPin size={11} /> {currentWeather.city} · 本地天气</span><h2>{temperature(currentWeather.temp)}</h2><p>{currentWeather.condition} · 最高 {temperature(currentWeather.high)} / 最低 {temperature(currentWeather.low)}</p></div><div className="weather-header-actions"><button className={weatherUnit === "c" ? "active" : ""} onClick={() => setWeatherUnit("c")}>℃</button><button className={weatherUnit === "f" ? "active" : ""} onClick={() => setWeatherUnit("f")}>℉</button><button aria-label="刷新天气" onClick={() => setWeatherUpdatedAt(new Date())}><RotateCw size={15} /></button></div></header><div className="weather-hero"><CloudSun size={68} /><div><strong>舒适的工作时段</strong><span>体感 {temperature(currentWeather.temp - 1)} · 更新于 {weatherUpdatedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })}</span></div></div><div className="weather-forecast">{currentWeather.forecast.map((item) => <div key={item.label}><span>{item.label}</span>{weatherSymbol(item.icon, 20)}<b>{temperature(item.temp)}</b></div>)}</div><div className="weather-details"><div><Droplets size={17} /><span><small>湿度</small><b>{currentWeather.humidity}%</b></span></div><div><Wind size={17} /><span><small>风速</small><b>{currentWeather.wind}</b></span></div><div><Sun size={17} /><span><small>日落</small><b>18:42</b></span></div></div></section></div>
+              <div className="weather-body"><aside className="weather-sidebar"><form className="weather-search" onSubmit={(event) => { event.preventDefault(); void fetchLiveWeather(); }}><Search size={14} /><input value={weatherSearch} onChange={(event) => setWeatherSearch(event.target.value)} placeholder="输入城市" aria-label="查询城市天气" /><button type="submit" aria-label="查询实时天气" disabled={weatherLoading}>{weatherLoading ? <RotateCw className="spinning" size={13} /> : <ArrowRight size={14} />}</button></form><div className="weather-sidebar-head"><CloudSun size={17} /><span>常用地点</span></div>{weatherLocations.map((location) => <button className={!liveWeather && location.id === weatherLocationId ? "active" : ""} key={location.id} onClick={() => { setLiveWeather(null); setWeatherLocationId(location.id); setWeatherError(""); }}><MapPin size={14} /><span><b>{location.city}</b><small>{temperature(location.temp)} · {location.condition}</small></span></button>)}</aside><section className="weather-content"><header><div><span className="eyebrow"><MapPin size={11} /> {currentWeather.city} · {liveWeather ? "实时数据" : "演示地点"}</span><h2>{temperature(currentWeather.temp)}</h2><p>{currentWeather.condition} · 最高 {temperature(currentWeather.high)} / 最低 {temperature(currentWeather.low)}</p></div><div className="weather-header-actions"><button className={weatherUnit === "c" ? "active" : ""} onClick={() => setWeatherUnit("c")}>℃</button><button className={weatherUnit === "f" ? "active" : ""} onClick={() => setWeatherUnit("f")}>℉</button><button aria-label="刷新天气" onClick={() => void fetchLiveWeather(liveWeather ? liveWeather.city.split(" · ")[0] : currentWeather.city)}><RotateCw className={weatherLoading ? "spinning" : ""} size={15} /></button></div></header>{weatherError && <div className="weather-error"><CircleHelp size={14} /><span>{weatherError}</span></div>}<div className="weather-hero"><CloudSun size={68} /><div><strong>{liveWeather ? "实时天气已更新" : "舒适的工作时段"}</strong><span>体感 {temperature(liveWeather?.apparent ?? currentWeather.temp - 1)} · 更新于 {weatherUpdatedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })}</span></div></div><div className="weather-forecast">{currentWeather.forecast.map((item) => <div key={item.label}><span>{item.label}</span>{weatherSymbol(item.icon, 20)}<b>{temperature(item.temp)}</b></div>)}</div><div className="weather-details"><div><Droplets size={17} /><span><small>湿度</small><b>{currentWeather.humidity}%</b></span></div><div><Wind size={17} /><span><small>风速</small><b>{currentWeather.wind}</b></span></div><div><Sun size={17} /><span><small>{liveWeather ? "时区" : "日落"}</small><b>{liveWeather ? liveWeather.timezone.replace("Asia/", "") : "18:42"}</b></span></div></div></section></div>
             </WindowChrome>
           )}
 
@@ -1041,14 +1166,14 @@ export default function Home() {
       ))}
 
       <nav className="dock" aria-label="应用程序 Dock" onClick={(event) => event.stopPropagation()}>
-        {(Object.keys(appMeta) as AppName[]).map((app) => {
+        {(Object.keys(appMeta) as AppName[]).filter((app) => app !== "trash").map((app) => {
           const meta = appMeta[app];
           const Icon = meta.icon;
           const isOpen = windows.some((item) => item.id === app);
           return <button key={app} className="dock-app" onClick={() => openApp(app)} aria-label={`打开${meta.label}`}><span className="dock-icon" style={{ backgroundColor: meta.color }}><Icon size={25} color="white" strokeWidth={1.65} /></span><span className="dock-tooltip">{meta.label}</span>{isOpen && <i />}</button>;
         })}
         <span className="dock-divider" />
-        <button className="dock-app" onClick={() => setWindows([])} aria-label="清空窗口"><span className="dock-icon trash"><Trash2 size={24} color="white" strokeWidth={1.65} /></span><span className="dock-tooltip">清空窗口</span></button>
+        <button className={`dock-app dock-trash-target ${draggedFilePath ? "ready" : ""}`} onClick={() => openApp("trash")} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (draggedFilePath) moveFileToTrash(draggedFilePath); }} aria-label="打开回收站或投放文件"><span className="dock-icon trash"><Trash2 size={24} color="white" strokeWidth={1.65} /></span><span className="dock-tooltip">回收站</span>{trashItems.length > 0 && <i />}</button>
       </nav>
 
       {activePanel === "control" && <section className="control-center popover-panel" onClick={(event) => event.stopPropagation()}><div className="control-grid"><button className={`control-tile wide ${wifi ? "on" : ""}`} onClick={() => setWifi(!wifi)}><Wifi size={19} /><div><b>Wi‑Fi</b><span>{wifi ? "Studio Network" : "已关闭"}</span></div></button><button className={`control-tile ${bluetooth ? "on" : ""}`} onClick={() => setBluetooth(!bluetooth)}><Bluetooth size={18} /><b>蓝牙</b></button><button className={`control-tile ${focus ? "on" : ""}`} onClick={() => setFocus(!focus)}><Moon size={18} /><b>专注</b></button></div><div className="control-quick-links"><button onClick={() => openApp("weather")}><CloudSun size={16} /><span>{currentWeather.city} {temperature(currentWeather.temp)}</span></button><button onClick={() => openApp("reminders")}><ListTodo size={16} /><span>{reminders.length - completedReminders} 项待办</span></button></div><div className="control-slider"><Volume2 size={18} /><input aria-label="控制中心音量" type="range" min={0} max={100} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /><span>{volume}%</span></div><div className="now-small"><img src={current.cover} alt="" /><div><span>正在播放</span><b>{current.title}</b></div><button onClick={playMusic}>{isPlaying ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}</button></div></section>}
