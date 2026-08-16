@@ -10,12 +10,15 @@ import {
   BookmarkCheck,
   Bell,
   Bluetooth,
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   CircleHelp,
+  Cloud,
   CloudSun,
   Command,
   Compass,
+  Droplets,
   FilePlus2,
   Folder,
   FolderOpen,
@@ -25,6 +28,8 @@ import {
   Headphones,
   Image,
   LayoutGrid,
+  ListTodo,
+  MapPin,
   Maximize2,
   MessageSquareText,
   Mic2,
@@ -42,14 +47,16 @@ import {
   Settings2,
   SlidersHorizontal,
   Sparkles,
+  Sun,
   TerminalSquare,
   Trash2,
   Volume2,
   Wifi,
+  Wind,
   X,
 } from "lucide-react";
 
-type AppName = "finder" | "music" | "notes" | "photos" | "settings" | "terminal" | "browser";
+type AppName = "finder" | "music" | "notes" | "photos" | "settings" | "terminal" | "browser" | "weather" | "calendar" | "reminders";
 
 type WindowBounds = {
   x: number;
@@ -101,6 +108,36 @@ type PhotoItem = {
   subtitle: string;
 };
 
+type VirtualFileSystem = {
+  directories: string[];
+  files: string[];
+};
+
+type CalendarEntry = {
+  id: string;
+  title: string;
+  time: string;
+  color: string;
+};
+
+type ReminderItem = {
+  id: string;
+  title: string;
+  done: boolean;
+};
+
+type WeatherLocation = {
+  id: string;
+  city: string;
+  temp: number;
+  condition: string;
+  high: number;
+  low: number;
+  humidity: number;
+  wind: string;
+  forecast: { label: string; icon: "sun" | "cloud" | "partly"; temp: number }[];
+};
+
 type AppWindow = {
   id: AppName;
   minimized: boolean;
@@ -134,6 +171,51 @@ const photoItems: PhotoItem[] = [
   { id: "alpine", src: WALLPAPER_ALPINE, alt: "高山云层壁纸", title: "高山云层", subtitle: "新壁纸 · 原创" },
 ];
 
+const VIRTUAL_HOME = "/Users/freshdesk";
+const initialVirtualFileSystem: VirtualFileSystem = {
+  directories: [VIRTUAL_HOME, `${VIRTUAL_HOME}/Desktop`, `${VIRTUAL_HOME}/Documents`, `${VIRTUAL_HOME}/Documents/Projects`, `${VIRTUAL_HOME}/Music`, `${VIRTUAL_HOME}/Pictures`],
+  files: [`${VIRTUAL_HOME}/README.md`, `${VIRTUAL_HOME}/Desktop/开机笔记.txt`, `${VIRTUAL_HOME}/Documents/工作流.md`, `${VIRTUAL_HOME}/Pictures/晨雾极光.jpg`],
+};
+
+const weatherLocations: WeatherLocation[] = [
+  { id: "shanghai", city: "上海", temp: 26, condition: "局部多云", high: 29, low: 23, humidity: 74, wind: "东南风 12 km/h", forecast: [{ label: "现在", icon: "partly", temp: 26 }, { label: "12 时", icon: "sun", temp: 28 }, { label: "15 时", icon: "partly", temp: 29 }, { label: "18 时", icon: "cloud", temp: 27 }] },
+  { id: "beijing", city: "北京", temp: 22, condition: "晴朗", high: 25, low: 16, humidity: 42, wind: "西北风 9 km/h", forecast: [{ label: "现在", icon: "sun", temp: 22 }, { label: "12 时", icon: "sun", temp: 24 }, { label: "15 时", icon: "partly", temp: 25 }, { label: "18 时", icon: "cloud", temp: 21 }] },
+  { id: "chengdu", city: "成都", temp: 24, condition: "阴有微雨", high: 25, low: 20, humidity: 83, wind: "北风 7 km/h", forecast: [{ label: "现在", icon: "cloud", temp: 24 }, { label: "12 时", icon: "cloud", temp: 25 }, { label: "15 时", icon: "partly", temp: 24 }, { label: "18 时", icon: "cloud", temp: 22 }] },
+];
+
+function virtualPath(input: string, cwd: string) {
+  const raw = input.trim();
+  if (!raw || raw === "~") return VIRTUAL_HOME;
+  const expanded = raw.startsWith("~") ? `${VIRTUAL_HOME}${raw.slice(1)}` : raw.startsWith("/") ? raw : `${cwd}/${raw}`;
+  const segments: string[] = [];
+  expanded.split("/").forEach((segment) => {
+    if (!segment || segment === ".") return;
+    if (segment === "..") segments.pop();
+    else segments.push(segment);
+  });
+  return `/${segments.join("/")}`;
+}
+
+function virtualParent(path: string) {
+  const parts = path.split("/").filter(Boolean);
+  parts.pop();
+  return `/${parts.join("/")}` || "/";
+}
+
+function virtualName(path: string) {
+  return path.split("/").filter(Boolean).at(-1) ?? path;
+}
+
+function displayVirtualPath(path: string) {
+  return path === VIRTUAL_HOME ? "~" : path.replace(VIRTUAL_HOME, "~");
+}
+
+function virtualDirectoryEntries(fileSystem: VirtualFileSystem, cwd: string) {
+  const folders = fileSystem.directories.filter((path) => path !== cwd && virtualParent(path) === cwd).map((path) => ({ name: virtualName(path), type: "directory" as const }));
+  const files = fileSystem.files.filter((path) => virtualParent(path) === cwd).map((path) => ({ name: virtualName(path), type: "file" as const }));
+  return [...folders.sort((a, b) => a.name.localeCompare(b.name)), ...files.sort((a, b) => a.name.localeCompare(b.name))];
+}
+
 const appMeta: Record<AppName, { label: string; color: string; icon: typeof FolderOpen }> = {
   finder: { label: "文件", color: "#2d8cff", icon: FolderOpen },
   music: { label: "音乐", color: "#ff5a6d", icon: Music2 },
@@ -142,6 +224,9 @@ const appMeta: Record<AppName, { label: string; color: string; icon: typeof Fold
   settings: { label: "设置", color: "#9aa5b8", icon: Settings2 },
   browser: { label: "浏览器", color: "#6fa8ff", icon: Globe2 },
   terminal: { label: "终端", color: "#2f3742", icon: TerminalSquare },
+  weather: { label: "天气", color: "#4c9eff", icon: CloudSun },
+  calendar: { label: "日历", color: "#f35f67", icon: CalendarDays },
+  reminders: { label: "提醒", color: "#ff9d4e", icon: ListTodo },
 };
 
 const defaultWindowBounds: Record<AppName, WindowBounds> = {
@@ -152,6 +237,9 @@ const defaultWindowBounds: Record<AppName, WindowBounds> = {
   settings: { x: 330, y: 90, width: 680, height: 470 },
   browser: { x: 160, y: 54, width: 920, height: 590 },
   terminal: { x: 450, y: 105, width: 560, height: 350 },
+  weather: { x: 360, y: 78, width: 620, height: 500 },
+  calendar: { x: 330, y: 74, width: 680, height: 505 },
+  reminders: { x: 420, y: 92, width: 570, height: 455 },
 };
 
 function formatDuration(value: number) {
@@ -330,7 +418,9 @@ function WindowChrome({
 }
 
 export default function Home() {
-  const [setupComplete, setSetupComplete] = useState(false);
+  const [setupComplete, setSetupComplete] = useState(() => {
+    try { return window.localStorage.getItem("freshdesk.setup-complete") === "true"; } catch { return false; }
+  });
   const [showSetupChoice, setShowSetupChoice] = useState(false);
   const [windows, setWindows] = useState<AppWindow[]>([]);
   const [activePanel, setActivePanel] = useState<"control" | "spotlight" | "calendar" | "about" | null>(null);
@@ -352,12 +442,14 @@ export default function Home() {
   ]);
   const [activeNoteId, setActiveNoteId] = useState("welcome-note");
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
+  const [photoViewMode, setPhotoViewMode] = useState<"highlights" | "library">("highlights");
   const [terminalLines, setTerminalLines] = useState<string[]>([
     "Freshdesk Terminal · simulated environment",
     "输入 help 查看可用命令。",
   ]);
   const [terminalInput, setTerminalInput] = useState("");
-  const [terminalCwd, setTerminalCwd] = useState("~");
+  const [terminalCwd, setTerminalCwd] = useState(VIRTUAL_HOME);
+  const [virtualFileSystem, setVirtualFileSystem] = useState<VirtualFileSystem>(initialVirtualFileSystem);
   const [systemAppearance, setSystemAppearance] = useState<"light" | "dark">("dark");
   const [snapPreview, setSnapPreview] = useState<SnapTarget | null>(null);
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
@@ -372,6 +464,20 @@ export default function Home() {
     { id: "web-platform", title: "Web 平台文档", url: "https://developer.mozilla.org" },
   ]);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const [weatherLocationId, setWeatherLocationId] = useState("shanghai");
+  const [weatherUnit, setWeatherUnit] = useState<"c" | "f">("c");
+  const [weatherUpdatedAt, setWeatherUpdatedAt] = useState(() => new Date());
+  const [calendarEntries, setCalendarEntries] = useState<CalendarEntry[]>([
+    { id: "morning", title: "晨间梳理", time: "09:00", color: "#6fa8ff" },
+    { id: "review", title: "界面回顾", time: "15:00", color: "#ee7b91" },
+  ]);
+  const [calendarDraft, setCalendarDraft] = useState("");
+  const [reminders, setReminders] = useState<ReminderItem[]>([
+    { id: "wallpaper", title: "选一张今天喜欢的壁纸", done: true },
+    { id: "note", title: "在便笺里记录一个想法", done: false },
+    { id: "music", title: "试听一首新的环境音乐", done: false },
+  ]);
+  const [reminderDraft, setReminderDraft] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const terminalOutputRef = useRef<HTMLDivElement | null>(null);
 
@@ -389,11 +495,26 @@ export default function Home() {
   const activeWallpaper = wallpapers.find((wallpaper) => wallpaper.id === activeWallpaperId) ?? wallpapers[0];
   const activeNote = notes.find((item) => item.id === activeNoteId) ?? notes[0];
   const selectedPhoto = photoItems.find((item) => item.id === selectedPhotoId) ?? null;
+  const currentWeather = weatherLocations.find((location) => location.id === weatherLocationId) ?? weatherLocations[0];
+  const completedReminders = reminders.filter((item) => item.done).length;
+
+  const temperature = (value: number) => weatherUnit === "c" ? `${value}°` : `${Math.round(value * 9 / 5 + 32)}°`;
+  const weatherSymbol = (icon: "sun" | "cloud" | "partly", size = 18) => icon === "sun" ? <Sun size={size} /> : icon === "cloud" ? <Cloud size={size} /> : <CloudSun size={size} />;
+
+  const movePhoto = (direction: 1 | -1) => {
+    if (!selectedPhotoId) return;
+    const index = Math.max(0, photoItems.findIndex((photo) => photo.id === selectedPhotoId));
+    setSelectedPhotoId(photoItems[(index + direction + photoItems.length) % photoItems.length].id);
+  };
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 15_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    try { window.localStorage.setItem("freshdesk.setup-complete", String(setupComplete)); } catch { /* local storage may be disabled */ }
+  }, [setupComplete]);
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume / 100;
@@ -411,6 +532,10 @@ export default function Home() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement;
+      const editing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable;
+      if (selectedPhotoId && !editing && event.key === "ArrowLeft") { event.preventDefault(); movePhoto(-1); return; }
+      if (selectedPhotoId && !editing && event.key === "ArrowRight") { event.preventDefault(); movePhoto(1); return; }
       if (event.key === "Escape") setActivePanel(null);
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -419,7 +544,7 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [selectedPhotoId]);
 
   const bringToFront = (id: AppName) => {
     setWindows((currentWindows) => {
@@ -643,30 +768,63 @@ export default function Home() {
     setNotes((items) => items.map((item) => item.id === activeNote.id ? { ...item, ...changes, updated: "刚刚" } : item));
   };
 
+  const addCalendarEntry = (event: FormEvent) => {
+    event.preventDefault();
+    const title = calendarDraft.trim();
+    if (!title) return;
+    setCalendarEntries((entries) => [...entries, { id: `event-${Date.now()}`, title, time: "18:00", color: ["#6fa8ff", "#ee7b91", "#72c5a5"][entries.length % 3] }]);
+    setCalendarDraft("");
+  };
+
+  const addReminder = (event: FormEvent) => {
+    event.preventDefault();
+    const title = reminderDraft.trim();
+    if (!title) return;
+    setReminders((items) => [{ id: `reminder-${Date.now()}`, title, done: false }, ...items]);
+    setReminderDraft("");
+  };
+
   const runTerminalCommand = (event: FormEvent) => {
     event.preventDefault();
     const raw = terminalInput.trim();
     if (!raw) return;
     const [command, ...args] = raw.split(/\s+/);
     const argument = args.join(" ");
-    const prompt = `freshdesk@desktop:${terminalCwd}$ ${raw}`;
+    const prompt = `freshdesk@desktop:${displayVirtualPath(terminalCwd)}$ ${raw}`;
     if (command === "clear") {
       setTerminalLines([]);
       setTerminalInput("");
       return;
     }
     let output: string[];
-    if (command === "help") output = ["可用命令：help, ls, cd, pwd, echo, whoami, date, clear"];
-    else if (command === "ls") output = terminalCwd === "~/Desktop" ? ["我的文件    灵感相册    开机笔记"] : terminalCwd === "~/Documents" ? ["项目草稿    收集箱    工作流.md"] : ["Desktop    Documents    Music    Pictures    README.md"];
-    else if (command === "pwd") output = [terminalCwd === "~" ? "/Users/freshdesk" : `/Users/freshdesk/${terminalCwd.replace("~/", "")}`];
+    if (command === "help") output = ["可用命令：help, ls, cd, pwd, echo, mkdir, touch, clear, whoami, date", "这是一个安全的浏览器内虚拟文件系统。"];
+    else if (command === "ls") {
+      const entries = virtualDirectoryEntries(virtualFileSystem, terminalCwd);
+      output = [entries.length ? entries.map((entry) => entry.type === "directory" ? `${entry.name}/` : entry.name).join("    ") : "（空目录）"];
+    }
+    else if (command === "pwd") output = [terminalCwd];
     else if (command === "whoami") output = ["freshdesk"];
     else if (command === "date") output = [new Date().toLocaleString("zh-CN")];
     else if (command === "echo") output = [argument];
     else if (command === "cd") {
-      const target = argument || "~";
-      const locations: Record<string, string> = { "~": "~", ".": terminalCwd, "..": "~", Desktop: "~/Desktop", Documents: "~/Documents", Music: "~/Music", Pictures: "~/Pictures" };
-      if (locations[target]) { setTerminalCwd(locations[target]); output = []; }
-      else output = [`cd: no such directory: ${target}`];
+      const target = virtualPath(argument || "~", terminalCwd);
+      if (virtualFileSystem.directories.includes(target)) { setTerminalCwd(target); output = []; }
+      else output = [`cd: no such directory: ${argument || "~"}`];
+    } else if (command === "mkdir") {
+      if (!argument) output = ["mkdir: missing operand"];
+      else {
+        const target = virtualPath(argument, terminalCwd);
+        if (virtualFileSystem.directories.includes(target) || virtualFileSystem.files.includes(target)) output = [`mkdir: ${argument}: File exists`];
+        else if (!virtualFileSystem.directories.includes(virtualParent(target))) output = [`mkdir: cannot create directory '${argument}': No such file or directory`];
+        else { setVirtualFileSystem((fileSystem) => ({ ...fileSystem, directories: [...fileSystem.directories, target] })); output = [`已创建目录 ${displayVirtualPath(target)}`]; }
+      }
+    } else if (command === "touch") {
+      if (!argument) output = ["touch: missing file operand"];
+      else {
+        const target = virtualPath(argument, terminalCwd);
+        if (!virtualFileSystem.directories.includes(virtualParent(target))) output = [`touch: cannot touch '${argument}': No such file or directory`];
+        else { if (!virtualFileSystem.files.includes(target)) setVirtualFileSystem((fileSystem) => ({ ...fileSystem, files: [...fileSystem.files, target] })); output = [`已创建文件 ${displayVirtualPath(target)}`]; }
+      }
     } else output = [`${command}: command not found`, "输入 help 查看可用命令。"];
     setTerminalLines((lines) => [...lines, prompt, ...output]);
     setTerminalInput("");
@@ -679,6 +837,9 @@ export default function Home() {
     { label: "我的文件", sublabel: "8 个项目", icon: Folder, app: "finder" as AppName },
     { label: "灵感相册", sublabel: "12 张照片", icon: Image, app: "photos" as AppName },
     { label: "开机笔记", sublabel: "刚刚创建", icon: MessageSquareText, app: "notes" as AppName },
+    { label: "天气", sublabel: `${currentWeather.city} ${temperature(currentWeather.temp)}`, icon: CloudSun, app: "weather" as AppName },
+    { label: "日历", sublabel: `${calendarEntries.length} 个事件`, icon: CalendarDays, app: "calendar" as AppName },
+    { label: "提醒事项", sublabel: `${reminders.length - completedReminders} 个待办`, icon: ListTodo, app: "reminders" as AppName },
   ];
 
   return (
@@ -739,6 +900,10 @@ export default function Home() {
             );
           })}
         </div>
+        <aside className="desktop-widgets" aria-label="桌面小组件">
+          <button className="desktop-widget weather-widget" onClick={() => openApp("weather")}><div className="widget-top"><span>天气</span><MapPin size={12} /></div><div className="widget-weather-main">{weatherSymbol("partly", 27)}<strong>{temperature(currentWeather.temp)}</strong><span>{currentWeather.city}</span></div><p>{currentWeather.condition} · 最高 {temperature(currentWeather.high)}</p></button>
+          <button className="desktop-widget reminders-widget" onClick={() => openApp("reminders")}><div className="widget-top"><span>提醒事项</span><ListTodo size={12} /></div><strong>{reminders.find((item) => !item.done)?.title ?? "今天全部完成"}</strong><p>{completedReminders} / {reminders.length} 已完成 · 点击查看</p></button>
+        </aside>
       </section>
 
       <section className="now-playing-chip" onClick={(event) => { event.stopPropagation(); openApp("music"); }} aria-label="当前播放">
@@ -806,7 +971,7 @@ export default function Home() {
 
           {windowItem.id === "photos" && (
             <WindowChrome title="灵感相册" appWindow={windowItem} onClose={() => closeApp("photos")} onMinimize={() => minimizeApp("photos")} onFocus={() => bringToFront("photos")} onMaximize={() => toggleMaximize("photos")} onBoundsChange={(bounds) => updateWindowBounds("photos", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("photos", side)} className="photos-window">
-              <div className="photos-body">{selectedPhoto ? <div className="photo-viewer"><button className="photo-back" onClick={() => setSelectedPhotoId(null)}><ChevronLeft size={16} /> 所有照片</button><img src={selectedPhoto.src} alt={selectedPhoto.alt} /><div><span className="eyebrow">已打开</span><h2>{selectedPhoto.title}</h2><p>{selectedPhoto.subtitle} · 可在“桌面与外观”中设为壁纸。</p></div></div> : <><header><div><span className="eyebrow">灵感相册</span><h2>光线留下的痕迹。</h2></div><button><Search size={17} /> 搜索</button></header><div className="photo-mosaic">{photoItems.slice(0, 4).map((photo) => <button key={photo.id} className="photo-tile" onClick={() => setSelectedPhotoId(photo.id)}><img src={photo.src} alt={photo.alt} /><span>{photo.title}</span></button>)}<button className="mosaic-caption" onClick={() => setSelectedPhotoId("alpine")}><Sparkles size={17} /><span>最近添加<br /><b>2 张壁纸</b></span></button></div><p>点开任意照片可查看大图；其中的原创壁纸也可直接在设置中更换。</p></>}</div>
+              <div className="photos-body">{selectedPhoto ? <div className="photo-viewer"><div className="photo-viewer-top"><button className="photo-back" onClick={() => setSelectedPhotoId(null)}><ChevronLeft size={16} /> 图库</button><span>{Math.max(1, photoItems.findIndex((photo) => photo.id === selectedPhoto.id) + 1)} / {photoItems.length}</span><div><button aria-label="上一张图片" onClick={() => movePhoto(-1)}><ChevronLeft size={16} /></button><button aria-label="下一张图片" onClick={() => movePhoto(1)}><ChevronRight size={16} /></button></div></div><div className="photo-stage"><button className="photo-stage-control left" aria-label="上一张图片" onClick={() => movePhoto(-1)}><ChevronLeft size={22} /></button><img src={selectedPhoto.src} alt={selectedPhoto.alt} /><button className="photo-stage-control right" aria-label="下一张图片" onClick={() => movePhoto(1)}><ChevronRight size={22} /></button></div><div className="photo-viewer-meta"><div><span className="eyebrow">已打开 · 可用左右箭头切换</span><h2>{selectedPhoto.title}</h2><p>{selectedPhoto.subtitle} · 可在“桌面与外观”中设为壁纸。</p></div><button className="photo-set-wallpaper" onClick={() => { const wallpaper = wallpapers.find((item) => item.src === selectedPhoto.src); if (wallpaper) setActiveWallpaperId(wallpaper.id); }}>设为壁纸</button></div></div> : <><header><div><span className="eyebrow">灵感相册</span><h2>{photoViewMode === "library" ? "我的图库。" : "光线留下的痕迹。"}</h2></div><div className="photos-view-actions"><button className={photoViewMode === "highlights" ? "active" : ""} onClick={() => setPhotoViewMode("highlights")}><Sparkles size={15} /> 精选</button><button className={photoViewMode === "library" ? "active" : ""} onClick={() => setPhotoViewMode("library")}><LayoutGrid size={15} /> 图库</button></div></header>{photoViewMode === "library" ? <div className="photo-library-grid">{photoItems.map((photo) => <button key={photo.id} className="photo-library-item" onClick={() => setSelectedPhotoId(photo.id)}><img src={photo.src} alt={photo.alt} /><span><b>{photo.title}</b><small>{photo.subtitle}</small></span></button>)}</div> : <><div className="photo-mosaic">{photoItems.slice(0, 4).map((photo) => <button key={photo.id} className="photo-tile" onClick={() => setSelectedPhotoId(photo.id)}><img src={photo.src} alt={photo.alt} /><span>{photo.title}</span></button>)}<button className="mosaic-caption" onClick={() => { setPhotoViewMode("library"); setSelectedPhotoId("alpine"); }}><Sparkles size={17} /><span>最近添加<br /><b>2 张壁纸</b></span></button></div><p>点开任意照片可查看大图；打开后可点击控制按钮或使用键盘左右箭头切换。</p></>}</>}</div>
             </WindowChrome>
           )}
 
@@ -849,9 +1014,27 @@ export default function Home() {
             </WindowChrome>
           )}
 
+          {windowItem.id === "weather" && (
+            <WindowChrome title="天气" appWindow={windowItem} onClose={() => closeApp("weather")} onMinimize={() => minimizeApp("weather")} onFocus={() => bringToFront("weather")} onMaximize={() => toggleMaximize("weather")} onBoundsChange={(bounds) => updateWindowBounds("weather", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("weather", side)} className="weather-window">
+              <div className="weather-body"><aside className="weather-sidebar"><div className="weather-sidebar-head"><CloudSun size={17} /><span>地点</span></div>{weatherLocations.map((location) => <button className={location.id === weatherLocationId ? "active" : ""} key={location.id} onClick={() => setWeatherLocationId(location.id)}><MapPin size={14} /><span><b>{location.city}</b><small>{temperature(location.temp)} · {location.condition}</small></span></button>)}</aside><section className="weather-content"><header><div><span className="eyebrow"><MapPin size={11} /> {currentWeather.city} · 本地天气</span><h2>{temperature(currentWeather.temp)}</h2><p>{currentWeather.condition} · 最高 {temperature(currentWeather.high)} / 最低 {temperature(currentWeather.low)}</p></div><div className="weather-header-actions"><button className={weatherUnit === "c" ? "active" : ""} onClick={() => setWeatherUnit("c")}>℃</button><button className={weatherUnit === "f" ? "active" : ""} onClick={() => setWeatherUnit("f")}>℉</button><button aria-label="刷新天气" onClick={() => setWeatherUpdatedAt(new Date())}><RotateCw size={15} /></button></div></header><div className="weather-hero"><CloudSun size={68} /><div><strong>舒适的工作时段</strong><span>体感 {temperature(currentWeather.temp - 1)} · 更新于 {weatherUpdatedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })}</span></div></div><div className="weather-forecast">{currentWeather.forecast.map((item) => <div key={item.label}><span>{item.label}</span>{weatherSymbol(item.icon, 20)}<b>{temperature(item.temp)}</b></div>)}</div><div className="weather-details"><div><Droplets size={17} /><span><small>湿度</small><b>{currentWeather.humidity}%</b></span></div><div><Wind size={17} /><span><small>风速</small><b>{currentWeather.wind}</b></span></div><div><Sun size={17} /><span><small>日落</small><b>18:42</b></span></div></div></section></div>
+            </WindowChrome>
+          )}
+
+          {windowItem.id === "calendar" && (
+            <WindowChrome title="日历" appWindow={windowItem} onClose={() => closeApp("calendar")} onMinimize={() => minimizeApp("calendar")} onFocus={() => bringToFront("calendar")} onMaximize={() => toggleMaximize("calendar")} onBoundsChange={(bounds) => updateWindowBounds("calendar", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("calendar", side)} className="calendar-app-window">
+              <div className="calendar-app-body"><aside className="calendar-app-sidebar"><div className="calendar-mini-date"><span>{now.toLocaleDateString("zh-CN", { month: "long" })}</span><strong>{now.getDate()}</strong><small>{now.toLocaleDateString("zh-CN", { weekday: "long" })}</small></div><button className="calendar-sidebar-active"><span className="calendar-color-dot" /> 我的日历</button><button onClick={() => openApp("reminders")}><ListTodo size={15} /> 已提醒事项</button></aside><section className="calendar-app-content"><header><div><span className="eyebrow">今日安排</span><h2>{currentDate}</h2></div><form onSubmit={addCalendarEntry}><input value={calendarDraft} onChange={(event) => setCalendarDraft(event.target.value)} placeholder="添加一个事件" aria-label="添加日历事件" /><button type="submit"><Plus size={15} /> 添加</button></form></header><div className="calendar-timeline">{["09:00", "10:00", "12:00", "15:00", "18:00"].map((time) => <div className="calendar-time-row" key={time}><time>{time}</time><div>{calendarEntries.filter((entry) => entry.time === time).map((entry) => <article key={entry.id} style={{ "--event-color": entry.color } as React.CSSProperties}><i /><span>{entry.title}</span><button aria-label={`删除 ${entry.title}`} onClick={() => setCalendarEntries((entries) => entries.filter((item) => item.id !== entry.id))}><X size={12} /></button></article>)}</div></div>)}</div></section></div>
+            </WindowChrome>
+          )}
+
+          {windowItem.id === "reminders" && (
+            <WindowChrome title="提醒事项" appWindow={windowItem} onClose={() => closeApp("reminders")} onMinimize={() => minimizeApp("reminders")} onFocus={() => bringToFront("reminders")} onMaximize={() => toggleMaximize("reminders")} onBoundsChange={(bounds) => updateWindowBounds("reminders", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("reminders", side)} className="reminders-window">
+              <div className="reminders-body"><header><div><span className="eyebrow">今天</span><h2>提醒事项</h2><p>{completedReminders} / {reminders.length} 已完成</p></div><button onClick={() => openApp("calendar")}><CalendarDays size={15} /> 日历</button></header><form className="reminder-add" onSubmit={addReminder}><Plus size={16} /><input value={reminderDraft} onChange={(event) => setReminderDraft(event.target.value)} placeholder="新提醒事项" aria-label="新提醒事项" /><button type="submit">添加</button></form><div className="reminder-list">{reminders.map((item) => <article className={item.done ? "done" : ""} key={item.id}><button className="reminder-check" aria-label={item.done ? `取消完成 ${item.title}` : `完成 ${item.title}`} onClick={() => setReminders((items) => items.map((reminder) => reminder.id === item.id ? { ...reminder, done: !reminder.done } : reminder))}>{item.done && <X size={11} />}</button><span>{item.title}</span><button className="reminder-delete" aria-label={`删除 ${item.title}`} onClick={() => setReminders((items) => items.filter((reminder) => reminder.id !== item.id))}><Trash2 size={14} /></button></article>)}</div></div>
+            </WindowChrome>
+          )}
+
           {windowItem.id === "terminal" && (
             <WindowChrome title="终端" appWindow={windowItem} onClose={() => closeApp("terminal")} onMinimize={() => minimizeApp("terminal")} onFocus={() => bringToFront("terminal")} onMaximize={() => toggleMaximize("terminal")} onBoundsChange={(bounds) => updateWindowBounds("terminal", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("terminal", side)} className="terminal-window">
-              <div className="terminal-body"><div className="terminal-scroll" ref={terminalOutputRef}>{terminalLines.map((line, index) => <p key={`${line}-${index}`} className={line.startsWith("freshdesk@desktop") ? "terminal-command" : ""}>{line.startsWith("freshdesk@desktop") ? <><span className="term-cyan">freshdesk@desktop</span>:<span className="term-blue">{terminalCwd}</span>$ {line.split("$ ").at(-1)}</> : line}</p>)}</div><form className="terminal-input-row" onSubmit={runTerminalCommand}><span><b className="term-cyan">freshdesk@desktop</b>:<b className="term-blue">{terminalCwd}</b>$</span><input autoFocus value={terminalInput} onChange={(event) => setTerminalInput(event.target.value)} aria-label="输入模拟终端命令" placeholder="试试 ls、cd、echo 或 help" /><button type="submit">运行</button></form></div>
+              <div className="terminal-body"><div className="terminal-scroll" ref={terminalOutputRef}>{terminalLines.map((line, index) => <p key={`${line}-${index}`} className={line.startsWith("freshdesk@desktop") ? "terminal-command" : ""}>{line.startsWith("freshdesk@desktop") ? <><span className="term-cyan">freshdesk@desktop</span>:<span className="term-blue">{line.split(":").slice(1).join(":").split("$")[0]}</span>${line.split("$ ").at(-1)}</> : line}</p>)}</div><form className="terminal-input-row" onSubmit={runTerminalCommand}><span><b className="term-cyan">freshdesk@desktop</b>:<b className="term-blue">{displayVirtualPath(terminalCwd)}</b>$</span><input autoFocus value={terminalInput} onChange={(event) => setTerminalInput(event.target.value)} aria-label="输入模拟终端命令" placeholder="试试 mkdir 工作区、touch 想法.md" /><button type="submit">运行</button></form></div>
             </WindowChrome>
           )}
         </div>
@@ -868,9 +1051,9 @@ export default function Home() {
         <button className="dock-app" onClick={() => setWindows([])} aria-label="清空窗口"><span className="dock-icon trash"><Trash2 size={24} color="white" strokeWidth={1.65} /></span><span className="dock-tooltip">清空窗口</span></button>
       </nav>
 
-      {activePanel === "control" && <section className="control-center popover-panel" onClick={(event) => event.stopPropagation()}><div className="control-grid"><button className={`control-tile wide ${wifi ? "on" : ""}`} onClick={() => setWifi(!wifi)}><Wifi size={19} /><div><b>Wi‑Fi</b><span>{wifi ? "Studio Network" : "已关闭"}</span></div></button><button className={`control-tile ${bluetooth ? "on" : ""}`} onClick={() => setBluetooth(!bluetooth)}><Bluetooth size={18} /><b>蓝牙</b></button><button className={`control-tile ${focus ? "on" : ""}`} onClick={() => setFocus(!focus)}><Moon size={18} /><b>专注</b></button></div><div className="control-slider"><Volume2 size={18} /><input aria-label="控制中心音量" type="range" min={0} max={100} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /><span>{volume}%</span></div><div className="now-small"><img src={current.cover} alt="" /><div><span>正在播放</span><b>{current.title}</b></div><button onClick={playMusic}>{isPlaying ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}</button></div></section>}
+      {activePanel === "control" && <section className="control-center popover-panel" onClick={(event) => event.stopPropagation()}><div className="control-grid"><button className={`control-tile wide ${wifi ? "on" : ""}`} onClick={() => setWifi(!wifi)}><Wifi size={19} /><div><b>Wi‑Fi</b><span>{wifi ? "Studio Network" : "已关闭"}</span></div></button><button className={`control-tile ${bluetooth ? "on" : ""}`} onClick={() => setBluetooth(!bluetooth)}><Bluetooth size={18} /><b>蓝牙</b></button><button className={`control-tile ${focus ? "on" : ""}`} onClick={() => setFocus(!focus)}><Moon size={18} /><b>专注</b></button></div><div className="control-quick-links"><button onClick={() => openApp("weather")}><CloudSun size={16} /><span>{currentWeather.city} {temperature(currentWeather.temp)}</span></button><button onClick={() => openApp("reminders")}><ListTodo size={16} /><span>{reminders.length - completedReminders} 项待办</span></button></div><div className="control-slider"><Volume2 size={18} /><input aria-label="控制中心音量" type="range" min={0} max={100} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /><span>{volume}%</span></div><div className="now-small"><img src={current.cover} alt="" /><div><span>正在播放</span><b>{current.title}</b></div><button onClick={playMusic}>{isPlaying ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}</button></div></section>}
 
-      {activePanel === "spotlight" && <section className="spotlight popover-panel" onClick={(event) => event.stopPropagation()}><div className="spotlight-input"><Search size={20} /><input autoFocus placeholder="搜索应用、文件和更多内容" aria-label="聚焦搜索" /></div><div className="spotlight-result"><span>建议</span><button onClick={() => openApp("notes")}><MessageSquareText size={17} /> 新桌面的第一天 <kbd>↵</kbd></button><button onClick={() => openApp("music")}><Music2 size={17} /> Idle Sequence <kbd>↵</kbd></button></div><footer><Command size={12} /> K 打开聚焦搜索</footer></section>}
+      {activePanel === "spotlight" && <section className="spotlight popover-panel" onClick={(event) => event.stopPropagation()}><div className="spotlight-input"><Search size={20} /><input autoFocus placeholder="搜索应用、文件和更多内容" aria-label="聚焦搜索" /></div><div className="spotlight-result"><span>建议</span><button onClick={() => openApp("notes")}><MessageSquareText size={17} /> 新桌面的第一天 <kbd>↵</kbd></button><button onClick={() => openApp("weather")}><CloudSun size={17} /> {currentWeather.city}天气 <kbd>↵</kbd></button><button onClick={() => openApp("reminders")}><ListTodo size={17} /> 提醒事项 <kbd>↵</kbd></button></div><footer><Command size={12} /> K 打开聚焦搜索</footer></section>}
 
       {activePanel === "calendar" && <section className="calendar-panel popover-panel" onClick={(event) => event.stopPropagation()}><span>{now.toLocaleDateString("zh-CN", { year: "numeric", month: "long" })}</span><h2>{now.getDate()}</h2><p>{currentDate}</p><div className="calendar-line" /><div className="calendar-event"><span>08:30</span><div><b>新的一天</b><small>留一点空间给自己。</small></div></div></section>}
 
