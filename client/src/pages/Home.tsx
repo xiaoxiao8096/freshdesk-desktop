@@ -1,9 +1,11 @@
 /**
  * 设计提醒：雾面硬件主义。以桌面空间关系组织内容，所有反馈要像精密设备一样安静、迅速、可信。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   Archive,
+  ArrowLeft,
+  ArrowRight,
   Bell,
   Bluetooth,
   ChevronLeft,
@@ -15,6 +17,7 @@ import {
   Folder,
   FolderOpen,
   Gauge,
+  Globe2,
   Grid2X2,
   Headphones,
   Image,
@@ -29,6 +32,7 @@ import {
   Pause,
   Play,
   Plus,
+  RotateCw,
   Search,
   Settings2,
   SlidersHorizontal,
@@ -40,12 +44,22 @@ import {
   X,
 } from "lucide-react";
 
-type AppName = "finder" | "music" | "notes" | "photos" | "settings" | "terminal";
+type AppName = "finder" | "music" | "notes" | "photos" | "settings" | "terminal" | "browser";
+
+type WindowBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
 
 type AppWindow = {
   id: AppName;
   minimized: boolean;
   zIndex: number;
+  bounds: WindowBounds;
+  maximized: boolean;
+  restoreBounds?: WindowBounds;
 };
 
 const WALLPAPER = "/manus-storage/freshdesk-aurora-wallpaper_a64c0088.jpg";
@@ -60,7 +74,18 @@ const appMeta: Record<AppName, { label: string; color: string; icon: typeof Fold
   notes: { label: "便笺", color: "#ffc045", icon: MessageSquareText },
   photos: { label: "照片", color: "#f07c8c", icon: Image },
   settings: { label: "设置", color: "#9aa5b8", icon: Settings2 },
+  browser: { label: "浏览器", color: "#6fa8ff", icon: Globe2 },
   terminal: { label: "终端", color: "#2f3742", icon: TerminalSquare },
+};
+
+const defaultWindowBounds: Record<AppName, WindowBounds> = {
+  finder: { x: 280, y: 72, width: 730, height: 535 },
+  music: { x: 180, y: 47, width: 900, height: 625 },
+  notes: { x: 390, y: 85, width: 658, height: 510 },
+  photos: { x: 250, y: 57, width: 770, height: 548 },
+  settings: { x: 330, y: 90, width: 680, height: 470 },
+  browser: { x: 160, y: 54, width: 920, height: 590 },
+  terminal: { x: 450, y: 105, width: 560, height: 350 },
 };
 
 function formatDuration(value: number) {
@@ -74,31 +99,110 @@ function formatDuration(value: number) {
 
 function WindowChrome({
   title,
+  appWindow,
   onClose,
   onMinimize,
   onFocus,
+  onMaximize,
+  onBoundsChange,
   children,
   className = "",
 }: {
   title: string;
+  appWindow: AppWindow;
   onClose: () => void;
   onMinimize: () => void;
   onFocus: () => void;
-  children: React.ReactNode;
+  onMaximize: () => void;
+  onBoundsChange: (bounds: WindowBounds) => void;
+  children: ReactNode;
   className?: string;
 }) {
+  const interactionRef = useRef<{ pointerId: number; mode: "drag" | "resize"; direction?: string; startX: number; startY: number; bounds: WindowBounds } | null>(null);
+  const minWidth = 360;
+  const minHeight = 240;
+
+  const beginInteraction = (event: ReactPointerEvent<HTMLElement>, mode: "drag" | "resize", direction?: string) => {
+    if (appWindow.maximized) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onFocus();
+    interactionRef.current = { pointerId: event.pointerId, mode, direction, startX: event.clientX, startY: event.clientY, bounds: appWindow.bounds };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const moveInteraction = (event: ReactPointerEvent<HTMLElement>) => {
+    const interaction = interactionRef.current;
+    if (!interaction || interaction.pointerId !== event.pointerId) return;
+    const dx = event.clientX - interaction.startX;
+    const dy = event.clientY - interaction.startY;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const base = interaction.bounds;
+    let next: WindowBounds = { ...base };
+
+    if (interaction.mode === "drag") {
+      next.x = Math.min(Math.max(8, base.x + dx), viewportWidth - 150);
+      next.y = Math.min(Math.max(30, base.y + dy), viewportHeight - 105);
+    } else {
+      const direction = interaction.direction ?? "";
+      if (direction.includes("right")) next.width = Math.min(Math.max(minWidth, base.width + dx), viewportWidth - base.x - 8);
+      if (direction.includes("bottom")) next.height = Math.min(Math.max(minHeight, base.height + dy), viewportHeight - base.y - 12);
+      if (direction.includes("left")) {
+        const width = Math.min(Math.max(minWidth, base.width - dx), base.x + base.width - 8);
+        next.x = base.x + base.width - width;
+        next.width = width;
+      }
+      if (direction.includes("top")) {
+        const height = Math.min(Math.max(minHeight, base.height - dy), base.y + base.height - 30);
+        next.y = base.y + base.height - height;
+        next.height = height;
+      }
+    }
+    onBoundsChange(next);
+  };
+
+  const endInteraction = (event: ReactPointerEvent<HTMLElement>) => {
+    if (interactionRef.current?.pointerId !== event.pointerId) return;
+    interactionRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
   return (
-    <section className={`app-window ${className}`} onMouseDown={onFocus} aria-label={`${title} 窗口`}>
-      <header className="window-chrome">
-        <div className="traffic-lights" aria-label="窗口控制">
+    <section
+      className={`app-window ${className} ${appWindow.maximized ? "is-maximized" : ""}`}
+      style={{ left: appWindow.bounds.x, top: appWindow.bounds.y, width: appWindow.bounds.width, height: appWindow.bounds.height }}
+      onMouseDown={onFocus}
+      aria-label={`${title} 窗口`}
+    >
+      <header
+        className="window-chrome"
+        onPointerDown={(event) => beginInteraction(event, "drag")}
+        onPointerMove={moveInteraction}
+        onPointerUp={endInteraction}
+        onPointerCancel={endInteraction}
+        onDoubleClick={onMaximize}
+      >
+        <div className="traffic-lights" aria-label="窗口控制" onPointerDown={(event) => event.stopPropagation()}>
           <button className="traffic-light close" aria-label={`关闭${title}`} onClick={(event) => { event.stopPropagation(); onClose(); }}><X size={9} /></button>
           <button className="traffic-light minimize" aria-label={`最小化${title}`} onClick={(event) => { event.stopPropagation(); onMinimize(); }}><Minimize2 size={8} /></button>
-          <button className="traffic-light expand" aria-label={`放大${title}`} onClick={(event) => event.stopPropagation()}><Maximize2 size={8} /></button>
+          <button className="traffic-light expand" aria-label={`${appWindow.maximized ? "还原" : "最大化"}${title}`} onClick={(event) => { event.stopPropagation(); onMaximize(); }}><Maximize2 size={8} /></button>
         </div>
         <span className="window-title">{title}</span>
-        <span className="window-chrome-spacer" />
+        <span className="window-chrome-spacer"><span>拖拽移动 · 双击最大化</span></span>
       </header>
       {children}
+      {!appWindow.maximized && ["top", "right", "bottom", "left", "top-left", "top-right", "bottom-left", "bottom-right"].map((direction) => (
+        <span
+          className={`resize-handle resize-${direction}`}
+          key={direction}
+          onPointerDown={(event) => beginInteraction(event, "resize", direction)}
+          onPointerMove={moveInteraction}
+          onPointerUp={endInteraction}
+          onPointerCancel={endInteraction}
+          aria-hidden="true"
+        />
+      ))}
     </section>
   );
 }
@@ -120,6 +224,11 @@ export default function Home() {
   const [duration, setDuration] = useState(150);
   const [note, setNote] = useState("今天先从一段安静的音乐开始。\n\n桌面已经准备好了。打开任意一个应用，看看这个空间会带你去哪里。");
   const [systemAppearance, setSystemAppearance] = useState<"light" | "dark">("dark");
+  const [browserAddress, setBrowserAddress] = useState("https://example.com");
+  const [browserUrl, setBrowserUrl] = useState("https://example.com");
+  const [browserHistory, setBrowserHistory] = useState(["https://example.com"]);
+  const [browserHistoryIndex, setBrowserHistoryIndex] = useState(0);
+  const [browserLoading, setBrowserLoading] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const tracks = useMemo(
@@ -160,18 +269,63 @@ export default function Home() {
     });
   };
 
+  const updateWindowBounds = (id: AppName, bounds: WindowBounds) => {
+    setWindows((currentWindows) => currentWindows.map((item) => item.id === id ? { ...item, bounds, maximized: false, restoreBounds: undefined } : item));
+  };
+
+  const toggleMaximize = (id: AppName) => {
+    setWindows((currentWindows) => currentWindows.map((item) => {
+      if (item.id !== id) return item;
+      if (item.maximized && item.restoreBounds) return { ...item, maximized: false, bounds: item.restoreBounds, restoreBounds: undefined };
+      return {
+        ...item,
+        maximized: true,
+        restoreBounds: item.bounds,
+        bounds: { x: 8, y: 30, width: Math.max(560, window.innerWidth - 16), height: Math.max(360, window.innerHeight - 42) },
+      };
+    }));
+  };
+
   const openApp = (id: AppName) => {
     setActivePanel(null);
     setWindows((currentWindows) => {
       const top = Math.max(25, ...currentWindows.map((item) => item.zIndex));
       const existing = currentWindows.find((item) => item.id === id);
       if (existing) return currentWindows.map((item) => (item.id === id ? { ...item, minimized: false, zIndex: top + 1 } : item));
-      return [...currentWindows, { id, minimized: false, zIndex: top + 1 }];
+      return [...currentWindows, { id, minimized: false, zIndex: top + 1, bounds: { ...defaultWindowBounds[id] }, maximized: false }];
     });
   };
 
   const closeApp = (id: AppName) => setWindows((currentWindows) => currentWindows.filter((item) => item.id !== id));
   const minimizeApp = (id: AppName) => setWindows((currentWindows) => currentWindows.map((item) => item.id === id ? { ...item, minimized: true } : item));
+
+  const normalizeUrl = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return browserUrl;
+    if (/^https?:\/\//i.test(trimmed)) return trimmed;
+    if (trimmed.includes(" ")) return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
+    return `https://${trimmed}`;
+  };
+
+  const navigateBrowser = (value: string) => {
+    const nextUrl = normalizeUrl(value);
+    const nextHistory = [...browserHistory.slice(0, browserHistoryIndex + 1), nextUrl];
+    setBrowserAddress(nextUrl);
+    setBrowserUrl(nextUrl);
+    setBrowserHistory(nextHistory);
+    setBrowserHistoryIndex(nextHistory.length - 1);
+    setBrowserLoading(true);
+  };
+
+  const stepBrowserHistory = (direction: -1 | 1) => {
+    const nextIndex = browserHistoryIndex + direction;
+    if (nextIndex < 0 || nextIndex >= browserHistory.length) return;
+    const nextUrl = browserHistory[nextIndex];
+    setBrowserHistoryIndex(nextIndex);
+    setBrowserAddress(nextUrl);
+    setBrowserUrl(nextUrl);
+    setBrowserLoading(true);
+  };
 
   const playMusic = async () => {
     const player = audioRef.current;
@@ -281,7 +435,7 @@ export default function Home() {
       {windows.map((windowItem) => !windowItem.minimized && (
         <div className="window-layer" key={windowItem.id} style={{ zIndex: windowItem.zIndex }}>
           {windowItem.id === "finder" && (
-            <WindowChrome title="我的文件" onClose={() => closeApp("finder")} onMinimize={() => minimizeApp("finder")} onFocus={() => bringToFront("finder")} className="finder-window">
+            <WindowChrome title="我的文件" appWindow={windowItem} onClose={() => closeApp("finder")} onMinimize={() => minimizeApp("finder")} onFocus={() => bringToFront("finder")} onMaximize={() => toggleMaximize("finder")} onBoundsChange={(bounds) => updateWindowBounds("finder", bounds)} className="finder-window">
               <div className="finder-body">
                 <aside className="finder-sidebar">
                   <p>个人收藏</p>
@@ -308,7 +462,7 @@ export default function Home() {
           )}
 
           {windowItem.id === "music" && (
-            <WindowChrome title="音乐" onClose={() => closeApp("music")} onMinimize={() => minimizeApp("music")} onFocus={() => bringToFront("music")} className="music-window">
+            <WindowChrome title="音乐" appWindow={windowItem} onClose={() => closeApp("music")} onMinimize={() => minimizeApp("music")} onFocus={() => bringToFront("music")} onMaximize={() => toggleMaximize("music")} onBoundsChange={(bounds) => updateWindowBounds("music", bounds)} className="music-window">
               <div className="music-body">
                 <aside className="music-sidebar"><div className="music-brand"><img src={BRAND_MARK} alt="" /> <span>Freshdesk Music</span></div><button className="library-active"><Headphones size={16} /> 现在收听</button><button><Compass size={16} /> 浏览</button><button><Grid2X2 size={16} /> 资料库</button><div className="playlist-add"><span>播放列表</span><Plus size={15} /></div><button className="playlist"><span className="playlist-dot coral" /> 已添加</button><button className="playlist"><span className="playlist-dot sky" /> 工作流</button></aside>
                 <div className="music-content">
@@ -325,26 +479,46 @@ export default function Home() {
           )}
 
           {windowItem.id === "notes" && (
-            <WindowChrome title="便笺" onClose={() => closeApp("notes")} onMinimize={() => minimizeApp("notes")} onFocus={() => bringToFront("notes")} className="notes-window">
+            <WindowChrome title="便笺" appWindow={windowItem} onClose={() => closeApp("notes")} onMinimize={() => minimizeApp("notes")} onFocus={() => bringToFront("notes")} onMaximize={() => toggleMaximize("notes")} onBoundsChange={(bounds) => updateWindowBounds("notes", bounds)} className="notes-window">
               <div className="notes-body"><aside className="notes-sidebar"><button className="new-note"><Plus size={16} /> 新建便笺</button><p>今天</p><button className="note-list-item active"><span>新桌面的第一天</span><small>今天</small></button><button className="note-list-item"><span>要尝试的事</span><small>昨天</small></button><button className="note-list-item"><span>给未来的提醒</span><small>8 月 14 日</small></button></aside><article className="note-editor"><header><div><h2>新桌面的第一天</h2><span>{currentDate} · 已自动存储</span></div><button aria-label="更多选项"><MoreHorizontal size={19} /></button></header><textarea value={note} onChange={(event) => setNote(event.target.value)} aria-label="编辑便笺" /><footer><span>⌘S 自动储存</span><span>{note.length} 个字符</span></footer></article></div>
             </WindowChrome>
           )}
 
           {windowItem.id === "photos" && (
-            <WindowChrome title="灵感相册" onClose={() => closeApp("photos")} onMinimize={() => minimizeApp("photos")} onFocus={() => bringToFront("photos")} className="photos-window">
+            <WindowChrome title="灵感相册" appWindow={windowItem} onClose={() => closeApp("photos")} onMinimize={() => minimizeApp("photos")} onFocus={() => bringToFront("photos")} onMaximize={() => toggleMaximize("photos")} onBoundsChange={(bounds) => updateWindowBounds("photos", bounds)} className="photos-window">
               <div className="photos-body"><header><div><span className="eyebrow">灵感相册</span><h2>光线留下的痕迹。</h2></div><button><Search size={17} /> 搜索</button></header><div className="photo-mosaic"><img src={WALLPAPER} alt="晨雾壁纸" /><img src={ALBUM_ORBIT} alt="蓝色球体" /><img src={ALBUM_TIDE} alt="丝绸材质" /><div className="mosaic-caption"><Sparkles size={17} /><span>最近添加<br /><b>3 个片段</b></span></div></div><p>这是一个为新桌面准备的私密视觉收藏夹。双击桌面上的“灵感相册”可随时回来。</p></div>
             </WindowChrome>
           )}
 
           {windowItem.id === "settings" && (
-            <WindowChrome title="设置" onClose={() => closeApp("settings")} onMinimize={() => minimizeApp("settings")} onFocus={() => bringToFront("settings")} className="settings-window">
+            <WindowChrome title="设置" appWindow={windowItem} onClose={() => closeApp("settings")} onMinimize={() => minimizeApp("settings")} onFocus={() => bringToFront("settings")} onMaximize={() => toggleMaximize("settings")} onBoundsChange={(bounds) => updateWindowBounds("settings", bounds)} className="settings-window">
               <div className="settings-body"><aside className="settings-sidebar"><div className="settings-profile"><img src={BRAND_MARK} alt="" /><div><strong>你的工作空间</strong><span>本机帐户</span></div></div><button className="settings-active"><Wifi size={16} /> Wi‑Fi</button><button><Bluetooth size={16} /> 蓝牙</button><button><Moon size={16} /> 专注模式</button><button><Gauge size={16} /> 桌面与外观</button></aside><section className="settings-content"><header><h2>桌面与外观</h2><p>按照此刻的光线调整你的工作空间。</p></header><div className="setting-block"><div><strong>外观</strong><span>让系统界面与壁纸保持平衡。</span></div><div className="appearance-choice"><button className={systemAppearance === "light" ? "chosen" : ""} onClick={() => setSystemAppearance("light")}><span className="light-preview" />浅色</button><button className={systemAppearance === "dark" ? "chosen" : ""} onClick={() => setSystemAppearance("dark")}><span className="dark-preview" />深色</button></div></div><div className="setting-block"><div><strong>新手引导</strong><span>重新查看欢迎界面和桌面提示。</span></div><button className="soft-action" onClick={() => { setSetupComplete(false); setShowSetupChoice(false); }}>再次打开</button></div><div className="setting-block"><div><strong>音量</strong><span>当前输出：内建扬声器</span></div><input aria-label="系统音量" type="range" min={0} max={100} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></div></section></div>
             </WindowChrome>
           )}
 
+          {windowItem.id === "browser" && (
+            <WindowChrome title="浏览器" appWindow={windowItem} onClose={() => closeApp("browser")} onMinimize={() => minimizeApp("browser")} onFocus={() => bringToFront("browser")} onMaximize={() => toggleMaximize("browser")} onBoundsChange={(bounds) => updateWindowBounds("browser", bounds)} className="browser-window">
+              <div className="browser-body">
+                <form className="browser-toolbar" onSubmit={(event) => { event.preventDefault(); navigateBrowser(browserAddress); }}>
+                  <div className="browser-nav-controls">
+                    <button type="button" aria-label="后退" disabled={browserHistoryIndex === 0} onClick={() => stepBrowserHistory(-1)}><ArrowLeft size={16} /></button>
+                    <button type="button" aria-label="前进" disabled={browserHistoryIndex >= browserHistory.length - 1} onClick={() => stepBrowserHistory(1)}><ArrowRight size={16} /></button>
+                    <button type="button" aria-label="刷新" onClick={() => { setBrowserLoading(true); setBrowserUrl(`${browserUrl}${browserUrl.includes("?") ? "&" : "?"}_r=${Date.now()}`); }}><RotateCw size={15} className={browserLoading ? "spinning" : ""} /></button>
+                  </div>
+                  <div className={`browser-address ${browserLoading ? "loading" : ""}`}><Globe2 size={14} /><input value={browserAddress} onChange={(event) => setBrowserAddress(event.target.value)} aria-label="输入网址" placeholder="输入网址或搜索内容" /><button type="submit">前往</button></div>
+                  <span className="browser-status">{browserLoading ? "正在连接" : "浏览器"}</span>
+                </form>
+                <div className="browser-frame-wrap">
+                  <iframe title="Freshdesk 浏览器内容" src={browserUrl} referrerPolicy="strict-origin-when-cross-origin" onLoad={() => setBrowserLoading(false)} />
+                  <div className="browser-frame-note"><CircleHelp size={13} /><span>若网站禁止嵌入，为保护站点安全，内容将无法在此窗口中显示。</span></div>
+                </div>
+              </div>
+            </WindowChrome>
+          )}
+
           {windowItem.id === "terminal" && (
-            <WindowChrome title="终端" onClose={() => closeApp("terminal")} onMinimize={() => minimizeApp("terminal")} onFocus={() => bringToFront("terminal")} className="terminal-window">
-              <div className="terminal-body"><p><span className="term-cyan">freshdesk@desktop</span>:<span className="term-blue">~</span>$ system.ready</p><p>Workspace initialized · 6 applications available</p><p>Music engine connected · listening is optional</p><p><span className="term-cyan">freshdesk@desktop</span>:<span className="term-blue">~</span>$ <span className="cursor">▍</span></p></div>
+            <WindowChrome title="终端" appWindow={windowItem} onClose={() => closeApp("terminal")} onMinimize={() => minimizeApp("terminal")} onFocus={() => bringToFront("terminal")} onMaximize={() => toggleMaximize("terminal")} onBoundsChange={(bounds) => updateWindowBounds("terminal", bounds)} className="terminal-window">
+              <div className="terminal-body"><p><span className="term-cyan">freshdesk@desktop</span>:<span className="term-blue">~</span>$ system.ready</p><p>Workspace initialized · 7 applications available</p><p>Browser engine connected · iframe sandbox active</p><p><span className="term-cyan">freshdesk@desktop</span>:<span className="term-blue">~</span>$ <span className="cursor">▍</span></p></div>
             </WindowChrome>
           )}
         </div>
