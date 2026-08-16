@@ -68,6 +68,14 @@ type BrowserTab = {
   loading: boolean;
   reloadNonce: number;
   pinned: boolean;
+  groupId?: string;
+};
+
+type BrowserTabGroup = {
+  id: string;
+  title: string;
+  color: string;
+  collapsed: boolean;
 };
 
 type BrowserBookmark = {
@@ -309,6 +317,8 @@ export default function Home() {
     { id: "welcome", title: "Example Domain", address: "https://example.com", url: "https://example.com", history: ["https://example.com"], historyIndex: 0, loading: false, reloadNonce: 0, pinned: true },
   ]);
   const [activeBrowserTabId, setActiveBrowserTabId] = useState("welcome");
+  const [browserTabGroups, setBrowserTabGroups] = useState<BrowserTabGroup[]>([]);
+  const [groupsOpen, setGroupsOpen] = useState(false);
   const [bookmarks, setBookmarks] = useState<BrowserBookmark[]>([
     { id: "freshdesk", title: "Freshdesk Desktop", url: "https://example.com" },
     { id: "web-platform", title: "Web 平台文档", url: "https://developer.mozilla.org" },
@@ -461,6 +471,33 @@ export default function Home() {
     if (id === activeBrowserTabId) setActiveBrowserTabId(nextTabs[Math.max(0, currentIndex - 1)].id);
   };
 
+  const groupPalette = ["#6fa8ff", "#ee7b91", "#f4bb57", "#72c5a5", "#9a8ae9"];
+
+  const createTabGroup = () => {
+    if (!activeBrowserTab) return;
+    const group: BrowserTabGroup = { id: `group-${Date.now()}`, title: `工作组 ${browserTabGroups.length + 1}`, color: groupPalette[browserTabGroups.length % groupPalette.length], collapsed: false };
+    setBrowserTabGroups((groups) => [...groups, group]);
+    setBrowserTabs((tabs) => tabs.map((tab) => tab.id === activeBrowserTab.id ? { ...tab, groupId: group.id, pinned: false } : tab));
+    setGroupsOpen(false);
+  };
+
+  const assignBrowserTabToGroup = (tabId: string, groupId: string | undefined) => {
+    setBrowserTabs((tabs) => tabs.map((tab) => tab.id === tabId ? { ...tab, groupId, pinned: groupId ? false : tab.pinned } : tab));
+  };
+
+  const assignTabToGroup = (groupId: string | undefined) => {
+    if (!activeBrowserTab) return;
+    assignBrowserTabToGroup(activeBrowserTab.id, groupId);
+    setGroupsOpen(false);
+  };
+
+  const toggleGroupCollapsed = (id: string) => setBrowserTabGroups((groups) => groups.map((group) => group.id === id ? { ...group, collapsed: !group.collapsed } : group));
+  const renameGroup = (id: string, title: string) => setBrowserTabGroups((groups) => groups.map((group) => group.id === id ? { ...group, title } : group));
+  const removeTabGroup = (id: string) => {
+    setBrowserTabGroups((groups) => groups.filter((group) => group.id !== id));
+    setBrowserTabs((tabs) => tabs.map((tab) => tab.groupId === id ? { ...tab, groupId: undefined } : tab));
+  };
+
   const sortTabsByPinned = (tabs: BrowserTab[]) => [...tabs.filter((tab) => tab.pinned), ...tabs.filter((tab) => !tab.pinned)];
 
   const togglePinBrowserTab = (id: string) => {
@@ -472,17 +509,23 @@ export default function Home() {
     setBrowserTabs((tabs) => {
       const dragged = tabs.find((tab) => tab.id === draggedTabId);
       const target = tabs.find((tab) => tab.id === targetId);
-      if (!dragged || !target || dragged.pinned !== target.pinned) return tabs;
-      const lane = tabs.filter((tab) => tab.pinned === dragged.pinned);
+      if (!dragged || !target || dragged.pinned !== target.pinned || dragged.groupId !== target.groupId) return tabs;
+      const lane = tabs.filter((tab) => tab.pinned === dragged.pinned && tab.groupId === dragged.groupId);
       const fromIndex = lane.findIndex((tab) => tab.id === draggedTabId);
       const toIndex = lane.findIndex((tab) => tab.id === targetId);
       const reordered = [...lane];
       reordered.splice(fromIndex, 1);
       reordered.splice(toIndex, 0, dragged);
-      return sortTabsByPinned([...tabs.filter((tab) => tab.pinned !== dragged.pinned), ...reordered]);
+      return sortTabsByPinned([...tabs.filter((tab) => tab.pinned !== dragged.pinned || tab.groupId !== dragged.groupId), ...reordered]);
     });
     setDraggedTabId(null);
   };
+
+  const groupedTabs = (groupId: string | undefined) => browserTabs.filter((tab) => !tab.pinned && tab.groupId === groupId);
+  const pinnedTabs = browserTabs.filter((tab) => tab.pinned);
+  const ungroupedTabs = groupedTabs(undefined);
+
+  const renderBrowserTab = (tab: BrowserTab, groupColor?: string) => <div className={`browser-tab ${tab.id === activeBrowserTabId ? "active" : ""} ${tab.pinned ? "pinned" : ""} ${tab.groupId ? "grouped" : ""} ${draggedTabId === tab.id ? "dragging" : ""}`} style={groupColor ? { borderTopColor: groupColor } : undefined} key={tab.id} draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; setDraggedTabId(tab.id); }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.stopPropagation(); reorderBrowserTabs(tab.id); }} onDragEnd={() => setDraggedTabId(null)}><button className="browser-tab-select" onClick={() => { setActiveBrowserTabId(tab.id); setBookmarksOpen(false); }}>{tab.pinned ? <Pin size={11} /> : <Globe2 size={12} />}<span>{tab.title}</span>{tab.loading && <i />}</button><button className={`browser-tab-pin ${tab.pinned ? "active" : ""}`} aria-label={`${tab.pinned ? "取消固定" : "固定"} ${tab.title}`} onClick={() => togglePinBrowserTab(tab.id)}><Pin size={11} /></button><button className="browser-tab-close" aria-label={`关闭 ${tab.title}`} onClick={() => closeBrowserTab(tab.id)}><X size={11} /></button></div>;
 
   const toggleCurrentBookmark = () => {
     if (!activeBrowserTab) return;
@@ -675,10 +718,13 @@ export default function Home() {
               <div className="browser-body">
                 <div className="browser-tabstrip" aria-label="浏览器标签页">
                   <div className="browser-tabs">
-                    {browserTabs.map((tab) => <div className={`browser-tab ${tab.id === activeBrowserTabId ? "active" : ""} ${tab.pinned ? "pinned" : ""} ${draggedTabId === tab.id ? "dragging" : ""}`} key={tab.id} draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; setDraggedTabId(tab.id); }} onDragOver={(event) => event.preventDefault()} onDrop={() => reorderBrowserTabs(tab.id)} onDragEnd={() => setDraggedTabId(null)}><button className="browser-tab-select" onClick={() => { setActiveBrowserTabId(tab.id); setBookmarksOpen(false); }}>{tab.pinned ? <Pin size={11} /> : <Globe2 size={12} />}<span>{tab.title}</span>{tab.loading && <i />}</button><button className={`browser-tab-pin ${tab.pinned ? "active" : ""}`} aria-label={`${tab.pinned ? "取消固定" : "固定"} ${tab.title}`} onClick={() => togglePinBrowserTab(tab.id)}><Pin size={11} /></button><button className="browser-tab-close" aria-label={`关闭 ${tab.title}`} onClick={() => closeBrowserTab(tab.id)}><X size={11} /></button></div>)}
+                    {pinnedTabs.map((tab) => renderBrowserTab(tab))}
+                    {browserTabGroups.map((group) => <div className={`browser-tab-group ${group.collapsed ? "collapsed" : ""}`} style={{ "--group-color": group.color } as React.CSSProperties} key={group.id} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); if (draggedTabId) assignBrowserTabToGroup(draggedTabId, group.id); setDraggedTabId(null); }}><button className="browser-group-label" onClick={() => toggleGroupCollapsed(group.id)}><i /><span>{group.title}</span><small>{groupedTabs(group.id).length}</small></button>{!group.collapsed && groupedTabs(group.id).map((tab) => renderBrowserTab(tab, group.color))}</div>)}
+                    {ungroupedTabs.map((tab) => renderBrowserTab(tab))}
                   </div>
                   <button className="browser-tab-add" aria-label="新建标签页" onClick={() => addBrowserTab()}><Plus size={15} /></button>
-                  <button className={`browser-bookmarks-toggle ${bookmarksOpen ? "active" : ""}`} aria-label="打开书签收藏夹" onClick={() => setBookmarksOpen(!bookmarksOpen)}><Bookmark size={14} /><span>收藏</span></button>
+                  <button className={`browser-groups-toggle ${groupsOpen ? "active" : ""}`} aria-label="管理标签页分组" onClick={() => { setGroupsOpen(!groupsOpen); setBookmarksOpen(false); }}><LayoutGrid size={14} /><span>分组</span></button>
+                  <button className={`browser-bookmarks-toggle ${bookmarksOpen ? "active" : ""}`} aria-label="打开书签收藏夹" onClick={() => { setBookmarksOpen(!bookmarksOpen); setGroupsOpen(false); }}><Bookmark size={14} /><span>收藏</span></button>
                 </div>
                 <form className="browser-toolbar" onSubmit={(event) => { event.preventDefault(); navigateBrowser(activeBrowserTab.address); }}>
                   <div className="browser-nav-controls">
@@ -692,8 +738,9 @@ export default function Home() {
                 </form>
                 <div className="browser-frame-wrap">
                   <iframe key={`${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 浏览器内容" src={activeBrowserTab.url} referrerPolicy="strict-origin-when-cross-origin" onLoad={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} />
-                  <div className="browser-frame-note"><CircleHelp size={13} /><span>若网站禁止嵌入，为保护站点安全，内容将无法在此窗口中显示。</span></div>
+                  <div className="browser-frame-note"><CircleHelp size={13} /><span>默认在此直接浏览；若目标网站主动禁止嵌入，浏览器会保留安全提示。</span></div>
                   {bookmarksOpen && <aside className="bookmark-drawer"><header><div><Bookmark size={15} /><span>收藏夹</span></div><button aria-label="关闭收藏夹" onClick={() => setBookmarksOpen(false)}><X size={14} /></button></header>{bookmarks.length ? <div className="bookmark-list">{bookmarks.map((bookmark) => <button key={bookmark.id} onClick={() => openBookmark(bookmark)}><Globe2 size={14} /><span><b>{bookmark.title}</b><small>{labelFromUrl(bookmark.url)}</small></span></button>)}</div> : <div className="bookmark-empty"><Bookmark size={18} /><span>还没有收藏的页面</span></div>}</aside>}
+                  {groupsOpen && <aside className="group-drawer"><header><div><LayoutGrid size={15} /><span>标签页分组</span></div><button aria-label="关闭标签分组" onClick={() => setGroupsOpen(false)}><X size={14} /></button></header><div className="group-drawer-actions"><button onClick={createTabGroup}><Plus size={14} /> 用当前标签新建分组</button><button onClick={() => assignTabToGroup(undefined)} disabled={!activeBrowserTab.groupId}><X size={14} /> 移出当前分组</button></div><div className="group-drawer-list">{browserTabGroups.length ? browserTabGroups.map((group) => <section key={group.id}><div className="group-drawer-row"><i style={{ background: group.color }} /><input value={group.title} aria-label="分组名称" onChange={(event) => renameGroup(group.id, event.target.value)} onBlur={(event) => { if (!event.target.value.trim()) renameGroup(group.id, "未命名分组"); }} /><button aria-label={`将当前标签移入 ${group.title}`} onClick={() => assignTabToGroup(group.id)}><ChevronRight size={13} /></button><button aria-label={`删除 ${group.title}`} onClick={() => removeTabGroup(group.id)}><Trash2 size={12} /></button></div><small>{groupedTabs(group.id).length} 个标签页 · 拖放标签也可加入</small></section>) : <div className="group-empty"><LayoutGrid size={18} /><span>先从当前标签创建一个工作组</span></div>}</div></aside>}
                 </div>
               </div>
             </WindowChrome>
