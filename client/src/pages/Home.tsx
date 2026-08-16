@@ -33,6 +33,7 @@ import {
   Music2,
   Pause,
   Play,
+  Pin,
   Plus,
   RotateCw,
   Search,
@@ -55,7 +56,7 @@ type WindowBounds = {
   height: number;
 };
 
-type SnapSide = "left" | "right";
+type SnapTarget = "left" | "right" | "top-left" | "top-right" | "bottom-left" | "bottom-right";
 
 type BrowserTab = {
   id: string;
@@ -66,6 +67,7 @@ type BrowserTab = {
   historyIndex: number;
   loading: boolean;
   reloadNonce: number;
+  pinned: boolean;
 };
 
 type BrowserBookmark = {
@@ -126,6 +128,42 @@ function labelFromUrl(url: string) {
   }
 }
 
+function detectSnapTarget(clientX: number, clientY: number, viewportWidth: number, viewportHeight: number): SnapTarget | null {
+  const edge = 54;
+  const corner = 112;
+  if (clientX < edge) {
+    if (clientY < corner) return "top-left";
+    if (clientY > viewportHeight - corner) return "bottom-left";
+    return "left";
+  }
+  if (clientX > viewportWidth - edge) {
+    if (clientY < corner) return "top-right";
+    if (clientY > viewportHeight - corner) return "bottom-right";
+    return "right";
+  }
+  return null;
+}
+
+function getSnapBounds(target: SnapTarget): WindowBounds {
+  const margin = 8;
+  const gutter = 12;
+  const top = 30;
+  const usableWidth = window.innerWidth - margin * 2;
+  const usableHeight = window.innerHeight - top - 12;
+  const halfWidth = (usableWidth - gutter) / 2;
+  const halfHeight = (usableHeight - gutter) / 2;
+  if (target === "left") return { x: margin, y: top, width: halfWidth, height: usableHeight };
+  if (target === "right") return { x: margin + halfWidth + gutter, y: top, width: halfWidth, height: usableHeight };
+  if (target === "top-left") return { x: margin, y: top, width: halfWidth, height: halfHeight };
+  if (target === "top-right") return { x: margin + halfWidth + gutter, y: top, width: halfWidth, height: halfHeight };
+  if (target === "bottom-left") return { x: margin, y: top + halfHeight + gutter, width: halfWidth, height: halfHeight };
+  return { x: margin + halfWidth + gutter, y: top + halfHeight + gutter, width: halfWidth, height: halfHeight };
+}
+
+function snapLabel(target: SnapTarget) {
+  return ({ left: "左侧分屏", right: "右侧分屏", "top-left": "左上象限", "top-right": "右上象限", "bottom-left": "左下象限", "bottom-right": "右下象限" } as Record<SnapTarget, string>)[target];
+}
+
 function WindowChrome({
   title,
   appWindow,
@@ -146,8 +184,8 @@ function WindowChrome({
   onFocus: () => void;
   onMaximize: () => void;
   onBoundsChange: (bounds: WindowBounds) => void;
-  onSnapPreviewChange?: (side: SnapSide | null) => void;
-  onSnap?: (side: SnapSide) => void;
+  onSnapPreviewChange?: (target: SnapTarget | null) => void;
+  onSnap?: (target: SnapTarget) => void;
   children: ReactNode;
   className?: string;
 }) {
@@ -177,7 +215,7 @@ function WindowChrome({
     if (interaction.mode === "drag") {
       next.x = Math.min(Math.max(8, base.x + dx), viewportWidth - 150);
       next.y = Math.min(Math.max(30, base.y + dy), viewportHeight - 105);
-      onSnapPreviewChange?.(event.clientX < 54 ? "left" : event.clientX > viewportWidth - 54 ? "right" : null);
+      onSnapPreviewChange?.(detectSnapTarget(event.clientX, event.clientY, viewportWidth, viewportHeight));
     } else {
       const direction = interaction.direction ?? "";
       if (direction.includes("right")) next.width = Math.min(Math.max(minWidth, base.width + dx), viewportWidth - base.x - 8);
@@ -200,14 +238,10 @@ function WindowChrome({
     const interaction = interactionRef.current;
     if (interaction?.pointerId !== event.pointerId) return;
     if (interaction.mode === "drag") {
-      const side = event.clientX < 54 ? "left" : event.clientX > window.innerWidth - 54 ? "right" : null;
+      const target = detectSnapTarget(event.clientX, event.clientY, window.innerWidth, window.innerHeight);
       onSnapPreviewChange?.(null);
-      if (side && onSnap) onSnap(side);
-      if (side && !onSnap) {
-        const gutter = 12;
-        const halfWidth = (window.innerWidth - gutter - 16) / 2;
-        onBoundsChange({ x: side === "left" ? 8 : 8 + halfWidth + gutter, y: 30, width: halfWidth, height: window.innerHeight - 42 });
-      }
+      if (target && onSnap) onSnap(target);
+      if (target && !onSnap) onBoundsChange(getSnapBounds(target));
     }
     interactionRef.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
@@ -234,7 +268,7 @@ function WindowChrome({
           <button className="traffic-light expand" aria-label={`${appWindow.maximized ? "还原" : "最大化"}${title}`} onClick={(event) => { event.stopPropagation(); onMaximize(); }}><Maximize2 size={8} /></button>
         </div>
         <span className="window-title">{title}</span>
-        <span className="window-chrome-spacer"><span>拖拽移动 · 双击最大化</span></span>
+        <span className="window-chrome-spacer"><span>⌘⌥ ←→ · 1–4 分屏</span></span>
       </header>
       {children}
       {!appWindow.maximized && ["top", "right", "bottom", "left", "top-left", "top-right", "bottom-left", "bottom-right"].map((direction) => (
@@ -269,9 +303,10 @@ export default function Home() {
   const [duration, setDuration] = useState(150);
   const [note, setNote] = useState("今天先从一段安静的音乐开始。\n\n桌面已经准备好了。打开任意一个应用，看看这个空间会带你去哪里。");
   const [systemAppearance, setSystemAppearance] = useState<"light" | "dark">("dark");
-  const [snapPreview, setSnapPreview] = useState<SnapSide | null>(null);
+  const [snapPreview, setSnapPreview] = useState<SnapTarget | null>(null);
+  const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>([
-    { id: "welcome", title: "Example Domain", address: "https://example.com", url: "https://example.com", history: ["https://example.com"], historyIndex: 0, loading: false, reloadNonce: 0 },
+    { id: "welcome", title: "Example Domain", address: "https://example.com", url: "https://example.com", history: ["https://example.com"], historyIndex: 0, loading: false, reloadNonce: 0, pinned: true },
   ]);
   const [activeBrowserTabId, setActiveBrowserTabId] = useState("welcome");
   const [bookmarks, setBookmarks] = useState<BrowserBookmark[]>([
@@ -324,12 +359,27 @@ export default function Home() {
     setWindows((currentWindows) => currentWindows.map((item) => item.id === id ? { ...item, bounds, maximized: false, restoreBounds: undefined } : item));
   };
 
-  const snapWindow = (id: AppName, side: SnapSide) => {
-    const gutter = 12;
-    const halfWidth = (window.innerWidth - gutter - 16) / 2;
-    const nextBounds = { x: side === "left" ? 8 : 8 + halfWidth + gutter, y: 30, width: halfWidth, height: window.innerHeight - 42 };
+  const snapWindow = (id: AppName, target: SnapTarget) => {
+    const nextBounds = getSnapBounds(target);
     setWindows((currentWindows) => currentWindows.map((item) => item.id === id ? { ...item, maximized: false, restoreBounds: item.bounds, bounds: nextBounds } : item));
   };
+
+  useEffect(() => {
+    const onSplitShortcut = (event: KeyboardEvent) => {
+      const source = event.target as HTMLElement;
+      if (source instanceof HTMLInputElement || source instanceof HTMLTextAreaElement || source.isContentEditable) return;
+      if (!(event.metaKey || event.ctrlKey) || !event.altKey) return;
+      const activeWindow = [...windows].filter((item) => !item.minimized).sort((a, b) => b.zIndex - a.zIndex)[0];
+      if (!activeWindow) return;
+      const targetMap: Record<string, SnapTarget> = { ArrowLeft: "left", ArrowRight: "right", "1": "top-left", "2": "top-right", "3": "bottom-left", "4": "bottom-right" };
+      const target = targetMap[event.key];
+      if (!target) return;
+      event.preventDefault();
+      snapWindow(activeWindow.id, target);
+    };
+    window.addEventListener("keydown", onSplitShortcut);
+    return () => window.removeEventListener("keydown", onSplitShortcut);
+  }, [windows]);
 
   const toggleMaximize = (id: AppName) => {
     setWindows((currentWindows) => currentWindows.map((item) => {
@@ -392,7 +442,7 @@ export default function Home() {
 
   const addBrowserTab = (url = "https://example.com") => {
     const id = `tab-${Date.now()}`;
-    const nextTab: BrowserTab = { id, title: labelFromUrl(url), address: url, url, history: [url], historyIndex: 0, loading: false, reloadNonce: 0 };
+    const nextTab: BrowserTab = { id, title: labelFromUrl(url), address: url, url, history: [url], historyIndex: 0, loading: false, reloadNonce: 0, pinned: false };
     setBrowserTabs((tabs) => [...tabs, nextTab]);
     setActiveBrowserTabId(id);
     setBookmarksOpen(false);
@@ -401,7 +451,7 @@ export default function Home() {
   const closeBrowserTab = (id: string) => {
     const currentIndex = browserTabs.findIndex((tab) => tab.id === id);
     if (browserTabs.length === 1) {
-      const replacement: BrowserTab = { id: `tab-${Date.now()}`, title: "新标签页", address: "https://example.com", url: "https://example.com", history: ["https://example.com"], historyIndex: 0, loading: false, reloadNonce: 0 };
+      const replacement: BrowserTab = { id: `tab-${Date.now()}`, title: "新标签页", address: "https://example.com", url: "https://example.com", history: ["https://example.com"], historyIndex: 0, loading: false, reloadNonce: 0, pinned: false };
       setBrowserTabs([replacement]);
       setActiveBrowserTabId(replacement.id);
       return;
@@ -409,6 +459,29 @@ export default function Home() {
     const nextTabs = browserTabs.filter((tab) => tab.id !== id);
     setBrowserTabs(nextTabs);
     if (id === activeBrowserTabId) setActiveBrowserTabId(nextTabs[Math.max(0, currentIndex - 1)].id);
+  };
+
+  const sortTabsByPinned = (tabs: BrowserTab[]) => [...tabs.filter((tab) => tab.pinned), ...tabs.filter((tab) => !tab.pinned)];
+
+  const togglePinBrowserTab = (id: string) => {
+    setBrowserTabs((tabs) => sortTabsByPinned(tabs.map((tab) => tab.id === id ? { ...tab, pinned: !tab.pinned } : tab)));
+  };
+
+  const reorderBrowserTabs = (targetId: string) => {
+    if (!draggedTabId || draggedTabId === targetId) return;
+    setBrowserTabs((tabs) => {
+      const dragged = tabs.find((tab) => tab.id === draggedTabId);
+      const target = tabs.find((tab) => tab.id === targetId);
+      if (!dragged || !target || dragged.pinned !== target.pinned) return tabs;
+      const lane = tabs.filter((tab) => tab.pinned === dragged.pinned);
+      const fromIndex = lane.findIndex((tab) => tab.id === draggedTabId);
+      const toIndex = lane.findIndex((tab) => tab.id === targetId);
+      const reordered = [...lane];
+      reordered.splice(fromIndex, 1);
+      reordered.splice(toIndex, 0, dragged);
+      return sortTabsByPinned([...tabs.filter((tab) => tab.pinned !== dragged.pinned), ...reordered]);
+    });
+    setDraggedTabId(null);
   };
 
   const toggleCurrentBookmark = () => {
@@ -466,7 +539,7 @@ export default function Home() {
     <main className={`desktop-stage ${systemAppearance === "dark" ? "desktop-dark" : "desktop-light"} ${snapPreview ? `snap-preview-${snapPreview}` : ""}`} onClick={() => { setSelectedDesktop(null); if (activePanel !== "about") setActivePanel(null); }}>
       <div className="wallpaper" style={{ backgroundImage: `url(${WALLPAPER})` }} />
       <div className="wallpaper-veil" />
-      {snapPreview && <div className={`desktop-snap-preview desktop-snap-${snapPreview}`}><span>{snapPreview === "left" ? "左侧分屏" : "右侧分屏"}</span></div>}
+      {snapPreview && <div className={`desktop-snap-preview desktop-snap-${snapPreview}`}><span>{snapLabel(snapPreview)}</span></div>}
       <audio
         ref={audioRef}
         src={MUSIC}
@@ -602,7 +675,7 @@ export default function Home() {
               <div className="browser-body">
                 <div className="browser-tabstrip" aria-label="浏览器标签页">
                   <div className="browser-tabs">
-                    {browserTabs.map((tab) => <div className={`browser-tab ${tab.id === activeBrowserTabId ? "active" : ""}`} key={tab.id}><button className="browser-tab-select" onClick={() => { setActiveBrowserTabId(tab.id); setBookmarksOpen(false); }}><Globe2 size={12} /><span>{tab.title}</span>{tab.loading && <i />}</button><button className="browser-tab-close" aria-label={`关闭 ${tab.title}`} onClick={() => closeBrowserTab(tab.id)}><X size={11} /></button></div>)}
+                    {browserTabs.map((tab) => <div className={`browser-tab ${tab.id === activeBrowserTabId ? "active" : ""} ${tab.pinned ? "pinned" : ""} ${draggedTabId === tab.id ? "dragging" : ""}`} key={tab.id} draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; setDraggedTabId(tab.id); }} onDragOver={(event) => event.preventDefault()} onDrop={() => reorderBrowserTabs(tab.id)} onDragEnd={() => setDraggedTabId(null)}><button className="browser-tab-select" onClick={() => { setActiveBrowserTabId(tab.id); setBookmarksOpen(false); }}>{tab.pinned ? <Pin size={11} /> : <Globe2 size={12} />}<span>{tab.title}</span>{tab.loading && <i />}</button><button className={`browser-tab-pin ${tab.pinned ? "active" : ""}`} aria-label={`${tab.pinned ? "取消固定" : "固定"} ${tab.title}`} onClick={() => togglePinBrowserTab(tab.id)}><Pin size={11} /></button><button className="browser-tab-close" aria-label={`关闭 ${tab.title}`} onClick={() => closeBrowserTab(tab.id)}><X size={11} /></button></div>)}
                   </div>
                   <button className="browser-tab-add" aria-label="新建标签页" onClick={() => addBrowserTab()}><Plus size={15} /></button>
                   <button className={`browser-bookmarks-toggle ${bookmarksOpen ? "active" : ""}`} aria-label="打开书签收藏夹" onClick={() => setBookmarksOpen(!bookmarksOpen)}><Bookmark size={14} /><span>收藏</span></button>
