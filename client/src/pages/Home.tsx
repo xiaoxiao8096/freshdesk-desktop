@@ -6,6 +6,8 @@ import {
   Archive,
   ArrowLeft,
   ArrowRight,
+  Bookmark,
+  BookmarkCheck,
   Bell,
   Bluetooth,
   ChevronLeft,
@@ -53,6 +55,25 @@ type WindowBounds = {
   height: number;
 };
 
+type SnapSide = "left" | "right";
+
+type BrowserTab = {
+  id: string;
+  title: string;
+  address: string;
+  url: string;
+  history: string[];
+  historyIndex: number;
+  loading: boolean;
+  reloadNonce: number;
+};
+
+type BrowserBookmark = {
+  id: string;
+  title: string;
+  url: string;
+};
+
 type AppWindow = {
   id: AppName;
   minimized: boolean;
@@ -97,6 +118,14 @@ function formatDuration(value: number) {
   return `${minutes}:${seconds}`;
 }
 
+function labelFromUrl(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "") || "新标签页";
+  } catch {
+    return url || "新标签页";
+  }
+}
+
 function WindowChrome({
   title,
   appWindow,
@@ -105,6 +134,8 @@ function WindowChrome({
   onFocus,
   onMaximize,
   onBoundsChange,
+  onSnapPreviewChange,
+  onSnap,
   children,
   className = "",
 }: {
@@ -115,6 +146,8 @@ function WindowChrome({
   onFocus: () => void;
   onMaximize: () => void;
   onBoundsChange: (bounds: WindowBounds) => void;
+  onSnapPreviewChange?: (side: SnapSide | null) => void;
+  onSnap?: (side: SnapSide) => void;
   children: ReactNode;
   className?: string;
 }) {
@@ -144,6 +177,7 @@ function WindowChrome({
     if (interaction.mode === "drag") {
       next.x = Math.min(Math.max(8, base.x + dx), viewportWidth - 150);
       next.y = Math.min(Math.max(30, base.y + dy), viewportHeight - 105);
+      onSnapPreviewChange?.(event.clientX < 54 ? "left" : event.clientX > viewportWidth - 54 ? "right" : null);
     } else {
       const direction = interaction.direction ?? "";
       if (direction.includes("right")) next.width = Math.min(Math.max(minWidth, base.width + dx), viewportWidth - base.x - 8);
@@ -163,7 +197,18 @@ function WindowChrome({
   };
 
   const endInteraction = (event: ReactPointerEvent<HTMLElement>) => {
-    if (interactionRef.current?.pointerId !== event.pointerId) return;
+    const interaction = interactionRef.current;
+    if (interaction?.pointerId !== event.pointerId) return;
+    if (interaction.mode === "drag") {
+      const side = event.clientX < 54 ? "left" : event.clientX > window.innerWidth - 54 ? "right" : null;
+      onSnapPreviewChange?.(null);
+      if (side && onSnap) onSnap(side);
+      if (side && !onSnap) {
+        const gutter = 12;
+        const halfWidth = (window.innerWidth - gutter - 16) / 2;
+        onBoundsChange({ x: side === "left" ? 8 : 8 + halfWidth + gutter, y: 30, width: halfWidth, height: window.innerHeight - 42 });
+      }
+    }
     interactionRef.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
@@ -224,11 +269,16 @@ export default function Home() {
   const [duration, setDuration] = useState(150);
   const [note, setNote] = useState("今天先从一段安静的音乐开始。\n\n桌面已经准备好了。打开任意一个应用，看看这个空间会带你去哪里。");
   const [systemAppearance, setSystemAppearance] = useState<"light" | "dark">("dark");
-  const [browserAddress, setBrowserAddress] = useState("https://example.com");
-  const [browserUrl, setBrowserUrl] = useState("https://example.com");
-  const [browserHistory, setBrowserHistory] = useState(["https://example.com"]);
-  const [browserHistoryIndex, setBrowserHistoryIndex] = useState(0);
-  const [browserLoading, setBrowserLoading] = useState(false);
+  const [snapPreview, setSnapPreview] = useState<SnapSide | null>(null);
+  const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>([
+    { id: "welcome", title: "Example Domain", address: "https://example.com", url: "https://example.com", history: ["https://example.com"], historyIndex: 0, loading: false, reloadNonce: 0 },
+  ]);
+  const [activeBrowserTabId, setActiveBrowserTabId] = useState("welcome");
+  const [bookmarks, setBookmarks] = useState<BrowserBookmark[]>([
+    { id: "freshdesk", title: "Freshdesk Desktop", url: "https://example.com" },
+    { id: "web-platform", title: "Web 平台文档", url: "https://developer.mozilla.org" },
+  ]);
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const tracks = useMemo(
@@ -240,6 +290,7 @@ export default function Home() {
   );
 
   const current = tracks[currentTrack];
+  const activeBrowserTab = browserTabs.find((tab) => tab.id === activeBrowserTabId) ?? browserTabs[0];
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 15_000);
@@ -273,6 +324,13 @@ export default function Home() {
     setWindows((currentWindows) => currentWindows.map((item) => item.id === id ? { ...item, bounds, maximized: false, restoreBounds: undefined } : item));
   };
 
+  const snapWindow = (id: AppName, side: SnapSide) => {
+    const gutter = 12;
+    const halfWidth = (window.innerWidth - gutter - 16) / 2;
+    const nextBounds = { x: side === "left" ? 8 : 8 + halfWidth + gutter, y: 30, width: halfWidth, height: window.innerHeight - 42 };
+    setWindows((currentWindows) => currentWindows.map((item) => item.id === id ? { ...item, maximized: false, restoreBounds: item.bounds, bounds: nextBounds } : item));
+  };
+
   const toggleMaximize = (id: AppName) => {
     setWindows((currentWindows) => currentWindows.map((item) => {
       if (item.id !== id) return item;
@@ -301,30 +359,72 @@ export default function Home() {
 
   const normalizeUrl = (value: string) => {
     const trimmed = value.trim();
-    if (!trimmed) return browserUrl;
+    if (!trimmed) return activeBrowserTab?.url ?? "https://example.com";
     if (/^https?:\/\//i.test(trimmed)) return trimmed;
     if (trimmed.includes(" ")) return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
     return `https://${trimmed}`;
   };
 
+  const updateActiveBrowserTab = (updater: (tab: BrowserTab) => BrowserTab) => {
+    setBrowserTabs((tabs) => tabs.map((tab) => tab.id === activeBrowserTabId ? updater(tab) : tab));
+  };
+
+  const updateBrowserAddress = (address: string) => updateActiveBrowserTab((tab) => ({ ...tab, address }));
+
   const navigateBrowser = (value: string) => {
     const nextUrl = normalizeUrl(value);
-    const nextHistory = [...browserHistory.slice(0, browserHistoryIndex + 1), nextUrl];
-    setBrowserAddress(nextUrl);
-    setBrowserUrl(nextUrl);
-    setBrowserHistory(nextHistory);
-    setBrowserHistoryIndex(nextHistory.length - 1);
-    setBrowserLoading(true);
+    updateActiveBrowserTab((tab) => {
+      const nextHistory = [...tab.history.slice(0, tab.historyIndex + 1), nextUrl];
+      return { ...tab, title: labelFromUrl(nextUrl), address: nextUrl, url: nextUrl, history: nextHistory, historyIndex: nextHistory.length - 1, loading: true };
+    });
   };
 
   const stepBrowserHistory = (direction: -1 | 1) => {
-    const nextIndex = browserHistoryIndex + direction;
-    if (nextIndex < 0 || nextIndex >= browserHistory.length) return;
-    const nextUrl = browserHistory[nextIndex];
-    setBrowserHistoryIndex(nextIndex);
-    setBrowserAddress(nextUrl);
-    setBrowserUrl(nextUrl);
-    setBrowserLoading(true);
+    updateActiveBrowserTab((tab) => {
+      const nextIndex = tab.historyIndex + direction;
+      if (nextIndex < 0 || nextIndex >= tab.history.length) return tab;
+      const nextUrl = tab.history[nextIndex];
+      return { ...tab, title: labelFromUrl(nextUrl), address: nextUrl, url: nextUrl, historyIndex: nextIndex, loading: true };
+    });
+  };
+
+  const refreshBrowser = () => updateActiveBrowserTab((tab) => ({ ...tab, loading: true, reloadNonce: tab.reloadNonce + 1 }));
+
+  const addBrowserTab = (url = "https://example.com") => {
+    const id = `tab-${Date.now()}`;
+    const nextTab: BrowserTab = { id, title: labelFromUrl(url), address: url, url, history: [url], historyIndex: 0, loading: false, reloadNonce: 0 };
+    setBrowserTabs((tabs) => [...tabs, nextTab]);
+    setActiveBrowserTabId(id);
+    setBookmarksOpen(false);
+  };
+
+  const closeBrowserTab = (id: string) => {
+    const currentIndex = browserTabs.findIndex((tab) => tab.id === id);
+    if (browserTabs.length === 1) {
+      const replacement: BrowserTab = { id: `tab-${Date.now()}`, title: "新标签页", address: "https://example.com", url: "https://example.com", history: ["https://example.com"], historyIndex: 0, loading: false, reloadNonce: 0 };
+      setBrowserTabs([replacement]);
+      setActiveBrowserTabId(replacement.id);
+      return;
+    }
+    const nextTabs = browserTabs.filter((tab) => tab.id !== id);
+    setBrowserTabs(nextTabs);
+    if (id === activeBrowserTabId) setActiveBrowserTabId(nextTabs[Math.max(0, currentIndex - 1)].id);
+  };
+
+  const toggleCurrentBookmark = () => {
+    if (!activeBrowserTab) return;
+    const existing = bookmarks.find((bookmark) => bookmark.url === activeBrowserTab.url);
+    if (existing) setBookmarks((items) => items.filter((item) => item.id !== existing.id));
+    else setBookmarks((items) => [...items, { id: `bookmark-${Date.now()}`, title: activeBrowserTab.title, url: activeBrowserTab.url }]);
+  };
+
+  const openBookmark = (bookmark: BrowserBookmark) => {
+    if (!activeBrowserTab) return;
+    updateActiveBrowserTab((tab) => {
+      const nextHistory = [...tab.history.slice(0, tab.historyIndex + 1), bookmark.url];
+      return { ...tab, title: bookmark.title, address: bookmark.url, url: bookmark.url, history: nextHistory, historyIndex: nextHistory.length - 1, loading: true };
+    });
+    setBookmarksOpen(false);
   };
 
   const playMusic = async () => {
@@ -363,9 +463,10 @@ export default function Home() {
   ];
 
   return (
-    <main className={`desktop-stage ${systemAppearance === "dark" ? "desktop-dark" : "desktop-light"}`} onClick={() => { setSelectedDesktop(null); if (activePanel !== "about") setActivePanel(null); }}>
+    <main className={`desktop-stage ${systemAppearance === "dark" ? "desktop-dark" : "desktop-light"} ${snapPreview ? `snap-preview-${snapPreview}` : ""}`} onClick={() => { setSelectedDesktop(null); if (activePanel !== "about") setActivePanel(null); }}>
       <div className="wallpaper" style={{ backgroundImage: `url(${WALLPAPER})` }} />
       <div className="wallpaper-veil" />
+      {snapPreview && <div className={`desktop-snap-preview desktop-snap-${snapPreview}`}><span>{snapPreview === "left" ? "左侧分屏" : "右侧分屏"}</span></div>}
       <audio
         ref={audioRef}
         src={MUSIC}
@@ -435,7 +536,7 @@ export default function Home() {
       {windows.map((windowItem) => !windowItem.minimized && (
         <div className="window-layer" key={windowItem.id} style={{ zIndex: windowItem.zIndex }}>
           {windowItem.id === "finder" && (
-            <WindowChrome title="我的文件" appWindow={windowItem} onClose={() => closeApp("finder")} onMinimize={() => minimizeApp("finder")} onFocus={() => bringToFront("finder")} onMaximize={() => toggleMaximize("finder")} onBoundsChange={(bounds) => updateWindowBounds("finder", bounds)} className="finder-window">
+            <WindowChrome title="我的文件" appWindow={windowItem} onClose={() => closeApp("finder")} onMinimize={() => minimizeApp("finder")} onFocus={() => bringToFront("finder")} onMaximize={() => toggleMaximize("finder")} onBoundsChange={(bounds) => updateWindowBounds("finder", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("finder", side)} className="finder-window">
               <div className="finder-body">
                 <aside className="finder-sidebar">
                   <p>个人收藏</p>
@@ -462,7 +563,7 @@ export default function Home() {
           )}
 
           {windowItem.id === "music" && (
-            <WindowChrome title="音乐" appWindow={windowItem} onClose={() => closeApp("music")} onMinimize={() => minimizeApp("music")} onFocus={() => bringToFront("music")} onMaximize={() => toggleMaximize("music")} onBoundsChange={(bounds) => updateWindowBounds("music", bounds)} className="music-window">
+            <WindowChrome title="音乐" appWindow={windowItem} onClose={() => closeApp("music")} onMinimize={() => minimizeApp("music")} onFocus={() => bringToFront("music")} onMaximize={() => toggleMaximize("music")} onBoundsChange={(bounds) => updateWindowBounds("music", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("music", side)} className="music-window">
               <div className="music-body">
                 <aside className="music-sidebar"><div className="music-brand"><img src={BRAND_MARK} alt="" /> <span>Freshdesk Music</span></div><button className="library-active"><Headphones size={16} /> 现在收听</button><button><Compass size={16} /> 浏览</button><button><Grid2X2 size={16} /> 资料库</button><div className="playlist-add"><span>播放列表</span><Plus size={15} /></div><button className="playlist"><span className="playlist-dot coral" /> 已添加</button><button className="playlist"><span className="playlist-dot sky" /> 工作流</button></aside>
                 <div className="music-content">
@@ -479,45 +580,54 @@ export default function Home() {
           )}
 
           {windowItem.id === "notes" && (
-            <WindowChrome title="便笺" appWindow={windowItem} onClose={() => closeApp("notes")} onMinimize={() => minimizeApp("notes")} onFocus={() => bringToFront("notes")} onMaximize={() => toggleMaximize("notes")} onBoundsChange={(bounds) => updateWindowBounds("notes", bounds)} className="notes-window">
+            <WindowChrome title="便笺" appWindow={windowItem} onClose={() => closeApp("notes")} onMinimize={() => minimizeApp("notes")} onFocus={() => bringToFront("notes")} onMaximize={() => toggleMaximize("notes")} onBoundsChange={(bounds) => updateWindowBounds("notes", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("notes", side)} className="notes-window">
               <div className="notes-body"><aside className="notes-sidebar"><button className="new-note"><Plus size={16} /> 新建便笺</button><p>今天</p><button className="note-list-item active"><span>新桌面的第一天</span><small>今天</small></button><button className="note-list-item"><span>要尝试的事</span><small>昨天</small></button><button className="note-list-item"><span>给未来的提醒</span><small>8 月 14 日</small></button></aside><article className="note-editor"><header><div><h2>新桌面的第一天</h2><span>{currentDate} · 已自动存储</span></div><button aria-label="更多选项"><MoreHorizontal size={19} /></button></header><textarea value={note} onChange={(event) => setNote(event.target.value)} aria-label="编辑便笺" /><footer><span>⌘S 自动储存</span><span>{note.length} 个字符</span></footer></article></div>
             </WindowChrome>
           )}
 
           {windowItem.id === "photos" && (
-            <WindowChrome title="灵感相册" appWindow={windowItem} onClose={() => closeApp("photos")} onMinimize={() => minimizeApp("photos")} onFocus={() => bringToFront("photos")} onMaximize={() => toggleMaximize("photos")} onBoundsChange={(bounds) => updateWindowBounds("photos", bounds)} className="photos-window">
+            <WindowChrome title="灵感相册" appWindow={windowItem} onClose={() => closeApp("photos")} onMinimize={() => minimizeApp("photos")} onFocus={() => bringToFront("photos")} onMaximize={() => toggleMaximize("photos")} onBoundsChange={(bounds) => updateWindowBounds("photos", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("photos", side)} className="photos-window">
               <div className="photos-body"><header><div><span className="eyebrow">灵感相册</span><h2>光线留下的痕迹。</h2></div><button><Search size={17} /> 搜索</button></header><div className="photo-mosaic"><img src={WALLPAPER} alt="晨雾壁纸" /><img src={ALBUM_ORBIT} alt="蓝色球体" /><img src={ALBUM_TIDE} alt="丝绸材质" /><div className="mosaic-caption"><Sparkles size={17} /><span>最近添加<br /><b>3 个片段</b></span></div></div><p>这是一个为新桌面准备的私密视觉收藏夹。双击桌面上的“灵感相册”可随时回来。</p></div>
             </WindowChrome>
           )}
 
           {windowItem.id === "settings" && (
-            <WindowChrome title="设置" appWindow={windowItem} onClose={() => closeApp("settings")} onMinimize={() => minimizeApp("settings")} onFocus={() => bringToFront("settings")} onMaximize={() => toggleMaximize("settings")} onBoundsChange={(bounds) => updateWindowBounds("settings", bounds)} className="settings-window">
+            <WindowChrome title="设置" appWindow={windowItem} onClose={() => closeApp("settings")} onMinimize={() => minimizeApp("settings")} onFocus={() => bringToFront("settings")} onMaximize={() => toggleMaximize("settings")} onBoundsChange={(bounds) => updateWindowBounds("settings", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("settings", side)} className="settings-window">
               <div className="settings-body"><aside className="settings-sidebar"><div className="settings-profile"><img src={BRAND_MARK} alt="" /><div><strong>你的工作空间</strong><span>本机帐户</span></div></div><button className="settings-active"><Wifi size={16} /> Wi‑Fi</button><button><Bluetooth size={16} /> 蓝牙</button><button><Moon size={16} /> 专注模式</button><button><Gauge size={16} /> 桌面与外观</button></aside><section className="settings-content"><header><h2>桌面与外观</h2><p>按照此刻的光线调整你的工作空间。</p></header><div className="setting-block"><div><strong>外观</strong><span>让系统界面与壁纸保持平衡。</span></div><div className="appearance-choice"><button className={systemAppearance === "light" ? "chosen" : ""} onClick={() => setSystemAppearance("light")}><span className="light-preview" />浅色</button><button className={systemAppearance === "dark" ? "chosen" : ""} onClick={() => setSystemAppearance("dark")}><span className="dark-preview" />深色</button></div></div><div className="setting-block"><div><strong>新手引导</strong><span>重新查看欢迎界面和桌面提示。</span></div><button className="soft-action" onClick={() => { setSetupComplete(false); setShowSetupChoice(false); }}>再次打开</button></div><div className="setting-block"><div><strong>音量</strong><span>当前输出：内建扬声器</span></div><input aria-label="系统音量" type="range" min={0} max={100} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></div></section></div>
             </WindowChrome>
           )}
 
           {windowItem.id === "browser" && (
-            <WindowChrome title="浏览器" appWindow={windowItem} onClose={() => closeApp("browser")} onMinimize={() => minimizeApp("browser")} onFocus={() => bringToFront("browser")} onMaximize={() => toggleMaximize("browser")} onBoundsChange={(bounds) => updateWindowBounds("browser", bounds)} className="browser-window">
+            <WindowChrome title="浏览器" appWindow={windowItem} onClose={() => closeApp("browser")} onMinimize={() => minimizeApp("browser")} onFocus={() => bringToFront("browser")} onMaximize={() => toggleMaximize("browser")} onBoundsChange={(bounds) => updateWindowBounds("browser", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("browser", side)} className="browser-window">
               <div className="browser-body">
-                <form className="browser-toolbar" onSubmit={(event) => { event.preventDefault(); navigateBrowser(browserAddress); }}>
-                  <div className="browser-nav-controls">
-                    <button type="button" aria-label="后退" disabled={browserHistoryIndex === 0} onClick={() => stepBrowserHistory(-1)}><ArrowLeft size={16} /></button>
-                    <button type="button" aria-label="前进" disabled={browserHistoryIndex >= browserHistory.length - 1} onClick={() => stepBrowserHistory(1)}><ArrowRight size={16} /></button>
-                    <button type="button" aria-label="刷新" onClick={() => { setBrowserLoading(true); setBrowserUrl(`${browserUrl}${browserUrl.includes("?") ? "&" : "?"}_r=${Date.now()}`); }}><RotateCw size={15} className={browserLoading ? "spinning" : ""} /></button>
+                <div className="browser-tabstrip" aria-label="浏览器标签页">
+                  <div className="browser-tabs">
+                    {browserTabs.map((tab) => <div className={`browser-tab ${tab.id === activeBrowserTabId ? "active" : ""}`} key={tab.id}><button className="browser-tab-select" onClick={() => { setActiveBrowserTabId(tab.id); setBookmarksOpen(false); }}><Globe2 size={12} /><span>{tab.title}</span>{tab.loading && <i />}</button><button className="browser-tab-close" aria-label={`关闭 ${tab.title}`} onClick={() => closeBrowserTab(tab.id)}><X size={11} /></button></div>)}
                   </div>
-                  <div className={`browser-address ${browserLoading ? "loading" : ""}`}><Globe2 size={14} /><input value={browserAddress} onChange={(event) => setBrowserAddress(event.target.value)} aria-label="输入网址" placeholder="输入网址或搜索内容" /><button type="submit">前往</button></div>
-                  <span className="browser-status">{browserLoading ? "正在连接" : "浏览器"}</span>
+                  <button className="browser-tab-add" aria-label="新建标签页" onClick={() => addBrowserTab()}><Plus size={15} /></button>
+                  <button className={`browser-bookmarks-toggle ${bookmarksOpen ? "active" : ""}`} aria-label="打开书签收藏夹" onClick={() => setBookmarksOpen(!bookmarksOpen)}><Bookmark size={14} /><span>收藏</span></button>
+                </div>
+                <form className="browser-toolbar" onSubmit={(event) => { event.preventDefault(); navigateBrowser(activeBrowserTab.address); }}>
+                  <div className="browser-nav-controls">
+                    <button type="button" aria-label="后退" disabled={activeBrowserTab.historyIndex === 0} onClick={() => stepBrowserHistory(-1)}><ArrowLeft size={16} /></button>
+                    <button type="button" aria-label="前进" disabled={activeBrowserTab.historyIndex >= activeBrowserTab.history.length - 1} onClick={() => stepBrowserHistory(1)}><ArrowRight size={16} /></button>
+                    <button type="button" aria-label="刷新" onClick={refreshBrowser}><RotateCw size={15} className={activeBrowserTab.loading ? "spinning" : ""} /></button>
+                  </div>
+                  <div className={`browser-address ${activeBrowserTab.loading ? "loading" : ""}`}><Globe2 size={14} /><input value={activeBrowserTab.address} onChange={(event) => updateBrowserAddress(event.target.value)} aria-label="输入网址" placeholder="输入网址或搜索内容" /><button type="submit">前往</button></div>
+                  <button type="button" className={`bookmark-current ${bookmarks.some((bookmark) => bookmark.url === activeBrowserTab.url) ? "saved" : ""}`} aria-label="收藏当前页面" onClick={toggleCurrentBookmark}>{bookmarks.some((bookmark) => bookmark.url === activeBrowserTab.url) ? <BookmarkCheck size={16} /> : <Bookmark size={16} />}</button>
+                  <span className="browser-status">{activeBrowserTab.loading ? "正在连接" : "浏览器"}</span>
                 </form>
                 <div className="browser-frame-wrap">
-                  <iframe title="Freshdesk 浏览器内容" src={browserUrl} referrerPolicy="strict-origin-when-cross-origin" onLoad={() => setBrowserLoading(false)} />
+                  <iframe key={`${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 浏览器内容" src={activeBrowserTab.url} referrerPolicy="strict-origin-when-cross-origin" onLoad={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} />
                   <div className="browser-frame-note"><CircleHelp size={13} /><span>若网站禁止嵌入，为保护站点安全，内容将无法在此窗口中显示。</span></div>
+                  {bookmarksOpen && <aside className="bookmark-drawer"><header><div><Bookmark size={15} /><span>收藏夹</span></div><button aria-label="关闭收藏夹" onClick={() => setBookmarksOpen(false)}><X size={14} /></button></header>{bookmarks.length ? <div className="bookmark-list">{bookmarks.map((bookmark) => <button key={bookmark.id} onClick={() => openBookmark(bookmark)}><Globe2 size={14} /><span><b>{bookmark.title}</b><small>{labelFromUrl(bookmark.url)}</small></span></button>)}</div> : <div className="bookmark-empty"><Bookmark size={18} /><span>还没有收藏的页面</span></div>}</aside>}
                 </div>
               </div>
             </WindowChrome>
           )}
 
           {windowItem.id === "terminal" && (
-            <WindowChrome title="终端" appWindow={windowItem} onClose={() => closeApp("terminal")} onMinimize={() => minimizeApp("terminal")} onFocus={() => bringToFront("terminal")} onMaximize={() => toggleMaximize("terminal")} onBoundsChange={(bounds) => updateWindowBounds("terminal", bounds)} className="terminal-window">
+            <WindowChrome title="终端" appWindow={windowItem} onClose={() => closeApp("terminal")} onMinimize={() => minimizeApp("terminal")} onFocus={() => bringToFront("terminal")} onMaximize={() => toggleMaximize("terminal")} onBoundsChange={(bounds) => updateWindowBounds("terminal", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("terminal", side)} className="terminal-window">
               <div className="terminal-body"><p><span className="term-cyan">freshdesk@desktop</span>:<span className="term-blue">~</span>$ system.ready</p><p>Workspace initialized · 7 applications available</p><p>Browser engine connected · iframe sandbox active</p><p><span className="term-cyan">freshdesk@desktop</span>:<span className="term-blue">~</span>$ <span className="cursor">▍</span></p></div>
             </WindowChrome>
           )}
