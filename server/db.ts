@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users } from "../drizzle/schema";
+import { InsertUser, users, videoPlaybackReports } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -87,6 +87,18 @@ export async function getUserByOpenId(openId: string) {
   const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
 
   return result.length > 0 ? result[0] : undefined;
+}
+
+export async function saveVideoPlaybackReport(input: { url: string; title: string; provider: string; reason: string }) {
+  const db = await getDb();
+  if (!db) return false;
+  try {
+    await db.insert(videoPlaybackReports).values(input);
+    return true;
+  } catch (error) {
+    console.error("[Database] Failed to save video playback report:", error);
+    return false;
+  }
 }
 
 // TODO: add feature queries here as your schema grows.

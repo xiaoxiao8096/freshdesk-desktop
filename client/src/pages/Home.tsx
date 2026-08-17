@@ -7,6 +7,9 @@ import { searchVirtualFiles } from "@/lib/finderSearch";
 import { appendNavigationRoute } from "@/lib/browserNavigation";
 import { resolveBrowserVideo, type BrowserVideoSource } from "@/lib/browserVideo";
 import { HlsVideoPlayer } from "@/components/HlsVideoPlayer";
+import { NativeVideoPlayer } from "@/components/NativeVideoPlayer";
+import { closeWindowById, sanitizeRestoredWindows, topVisibleWindow } from "@/lib/windowState";
+import { recordRecentVideo } from "@/lib/recentVideos";
 import {
   Archive,
   ArrowLeft,
@@ -152,6 +155,22 @@ type BrowserDownload = {
   status: "已保存" | "准备就绪";
 };
 
+type RecentVideo = {
+  id: string;
+  title: string;
+  url: string;
+  provider: string;
+  watchedAt: string;
+};
+
+type VideoPlaybackReport = {
+  id: string;
+  url: string;
+  title: string;
+  provider: string;
+  reportedAt: string;
+};
+
 type NoteDocument = {
   id: string;
   title: string;
@@ -247,6 +266,8 @@ type DesktopSnapshot = Partial<{
   bookmarks: BrowserBookmark[];
   browserHistoryEntries: BrowserHistoryEntry[];
   browserDownloads: BrowserDownload[];
+  recentVideos: RecentVideo[];
+  videoPlaybackReports: VideoPlaybackReport[];
   editorPath: string | null;
   editorDraft: string;
   calendarEntries: CalendarEntry[];
@@ -536,10 +557,10 @@ function WindowChrome({
         onPointerCancel={endInteraction}
         onDoubleClick={onMaximize}
       >
-        <div className="traffic-lights" aria-label="窗口控制" onPointerDown={(event) => event.stopPropagation()}>
-          <button className="traffic-light close" aria-label={`关闭${title}`} onClick={(event) => { event.stopPropagation(); onClose(); }}><X size={9} /></button>
-          <button className="traffic-light minimize" aria-label={`最小化${title}`} onClick={(event) => { event.stopPropagation(); onMinimize(); }}><Minimize2 size={8} /></button>
-          <button className="traffic-light expand" aria-label={`${appWindow.maximized ? "还原" : "最大化"}${title}`} onClick={(event) => { event.stopPropagation(); onMaximize(); }}><Maximize2 size={8} /></button>
+        <div className="traffic-lights" aria-label="窗口控制" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); }} onPointerUp={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
+          <button type="button" className="traffic-light close" aria-label={`关闭${title}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onClose(); }}><X size={9} /></button>
+          <button type="button" className="traffic-light minimize" aria-label={`最小化${title}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onMinimize(); }}><Minimize2 size={8} /></button>
+          <button type="button" className="traffic-light expand" aria-label={`${appWindow.maximized ? "还原" : "最大化"}${title}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onMaximize(); }}><Maximize2 size={8} /></button>
         </div>
         <span className="window-title">{title}</span>
         <span className="window-chrome-spacer"><span>⌘⌥ ←→ · 1–4 分屏</span></span>
@@ -567,7 +588,7 @@ export default function Home() {
     try { return window.localStorage.getItem("freshdesk.setup-complete") === "true"; } catch { return false; }
   });
   const [showSetupChoice, setShowSetupChoice] = useState(false);
-  const [windows, setWindows] = useState<AppWindow[]>(() => restoredDesktopState?.windows ?? []);
+  const [windows, setWindows] = useState<AppWindow[]>(() => sanitizeRestoredWindows(restoredDesktopState?.windows));
   const [activePanel, setActivePanel] = useState<"control" | "spotlight" | "calendar" | "about" | null>(null);
   const [selectedDesktop, setSelectedDesktop] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
@@ -626,6 +647,14 @@ export default function Home() {
   const [readerLinkFilter, setReaderLinkFilter] = useState("");
   const [browserHistoryEntries, setBrowserHistoryEntries] = useState<BrowserHistoryEntry[]>(() => restoredDesktopState?.browserHistoryEntries ?? []);
   const [browserDownloads, setBrowserDownloads] = useState<BrowserDownload[]>(() => restoredDesktopState?.browserDownloads ?? []);
+  const [recentVideos, setRecentVideos] = useState<RecentVideo[]>(() => restoredDesktopState?.recentVideos ?? []);
+  const [videoPlaybackReports, setVideoPlaybackReports] = useState<VideoPlaybackReport[]>(() => restoredDesktopState?.videoPlaybackReports ?? []);
+  const [recentVideosOpen, setRecentVideosOpen] = useState(false);
+  const [videoPlaybackRate, setVideoPlaybackRate] = useState(1);
+  const [videoSubtitleUrl, setVideoSubtitleUrl] = useState("");
+  const [captionsEnabled, setCaptionsEnabled] = useState(true);
+  const [videoControlNote, setVideoControlNote] = useState("");
+  const [videoReportStatus, setVideoReportStatus] = useState<"idle" | "sending" | "reported">("idle");
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [previewFilePath, setPreviewFilePath] = useState<string | null>(null);
@@ -655,6 +684,7 @@ export default function Home() {
   const [reminderDraft, setReminderDraft] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const terminalOutputRef = useRef<HTMLDivElement | null>(null);
+  const nativeVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const tracks = useMemo(
     () => [
@@ -683,6 +713,10 @@ export default function Home() {
   const readerInput = useMemo(() => ({ url: /^https?:\/\//i.test(activeBrowserTab?.url ?? "") ? activeBrowserTab.url : "https://example.com" }), [activeBrowserTab?.url]);
   const readerQuery = trpc.browser.readPage.useQuery(readerInput, { enabled: activeBrowserTab?.mode === "reader" });
   const browserUtils = trpc.useUtils();
+  const videoReportMutation = trpc.videoReports.submit.useMutation({
+    onSuccess: () => setVideoReportStatus("reported"),
+    onError: () => setVideoReportStatus("reported"),
+  });
   const visibleReaderLinks = useMemo(() => {
     const query = readerLinkFilter.trim().toLocaleLowerCase();
     const links = readerQuery.data?.links ?? [];
@@ -839,9 +873,9 @@ export default function Home() {
   }, [setupComplete]);
 
   useEffect(() => {
-    const snapshot: DesktopSnapshot = { setupComplete, windows, activeWallpaperId, customWallpapers, notes, activeNoteId, virtualFileSystem, fileContents, trashItems, finderPath, systemAppearance, volume, currentTrack, browserTabs, activeBrowserTabId, browserTabGroups, bookmarks, browserHistoryEntries, browserDownloads, editorPath, editorDraft, calendarEntries, reminders, weatherUnit };
+    const snapshot: DesktopSnapshot = { setupComplete, windows, activeWallpaperId, customWallpapers, notes, activeNoteId, virtualFileSystem, fileContents, trashItems, finderPath, systemAppearance, volume, currentTrack, browserTabs, activeBrowserTabId, browserTabGroups, bookmarks, browserHistoryEntries, browserDownloads, recentVideos, videoPlaybackReports, editorPath, editorDraft, calendarEntries, reminders, weatherUnit };
     try { window.localStorage.setItem(DESKTOP_STATE_KEY, JSON.stringify(snapshot)); } catch { /* storage may be unavailable */ }
-  }, [setupComplete, windows, activeWallpaperId, customWallpapers, notes, activeNoteId, virtualFileSystem, fileContents, trashItems, finderPath, systemAppearance, volume, currentTrack, browserTabs, activeBrowserTabId, browserTabGroups, bookmarks, browserHistoryEntries, browserDownloads, editorPath, editorDraft, calendarEntries, reminders, weatherUnit]);
+  }, [setupComplete, windows, activeWallpaperId, customWallpapers, notes, activeNoteId, virtualFileSystem, fileContents, trashItems, finderPath, systemAppearance, volume, currentTrack, browserTabs, activeBrowserTabId, browserTabGroups, bookmarks, browserHistoryEntries, browserDownloads, recentVideos, videoPlaybackReports, editorPath, editorDraft, calendarEntries, reminders, weatherUnit]);
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume / 100;
@@ -864,6 +898,11 @@ export default function Home() {
       if (selectedPhotoId && !editing && event.key === "ArrowLeft") { event.preventDefault(); movePhoto(-1); return; }
       if (selectedPhotoId && !editing && event.key === "ArrowRight") { event.preventDefault(); movePhoto(1); return; }
       if (event.key === "Escape") setActivePanel(null);
+      if (!editing && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "w") {
+        const topWindow = topVisibleWindow(windows);
+        if (topWindow) { event.preventDefault(); setWindows((currentWindows) => closeWindowById(currentWindows, topWindow.id)); }
+        return;
+      }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setActivePanel("spotlight");
@@ -871,7 +910,7 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedPhotoId]);
+  }, [selectedPhotoId, windows]);
 
   useEffect(() => {
     if (activeBrowserTab?.mode !== "reader") return;
@@ -889,6 +928,26 @@ export default function Home() {
     if (!activeBrowserTab || activeBrowserTab.mode !== "video" || activeBrowserTab.loading) return;
     recordBrowserHistory(activeBrowserTab.title, activeBrowserTab.url, "video");
   }, [activeBrowserTab?.id, activeBrowserTab?.loading, activeBrowserTab?.mode, activeBrowserTab?.title, activeBrowserTab?.url]);
+
+  useEffect(() => {
+    if (!activeBrowserTab || activeBrowserTab.mode !== "video" || activeBrowserTab.url === "about:blank") return;
+    const source = activeBrowserTab.videoSource;
+    const item: RecentVideo = { id: `recent-video-${Date.now()}`, title: activeBrowserTab.title, url: activeBrowserTab.url, provider: source?.provider ?? "视频", watchedAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) };
+    setRecentVideos((items) => recordRecentVideo(items, item));
+    setVideoControlNote("");
+    setVideoReportStatus("idle");
+  }, [activeBrowserTab?.id, activeBrowserTab?.mode, activeBrowserTab?.title, activeBrowserTab?.url, activeBrowserTab?.videoSource?.provider]);
+
+  useEffect(() => {
+    const player = nativeVideoRef.current;
+    if (player) player.playbackRate = videoPlaybackRate;
+  }, [videoPlaybackRate]);
+
+  useEffect(() => {
+    const player = nativeVideoRef.current;
+    if (!player) return;
+    Array.from(player.textTracks).forEach((track) => { track.mode = captionsEnabled ? "showing" : "hidden"; });
+  }, [captionsEnabled, videoSubtitleUrl]);
 
   useEffect(() => {
     if (!activeBrowserTab || activeBrowserTab.mode !== "web") { setFrameStatus("idle"); return; }
@@ -953,8 +1012,41 @@ export default function Home() {
     });
   };
 
-  const closeApp = (id: AppName) => setWindows((currentWindows) => currentWindows.filter((item) => item.id !== id));
+  const closeApp = (id: AppName) => setWindows((currentWindows) => closeWindowById(currentWindows, id));
   const minimizeApp = (id: AppName) => setWindows((currentWindows) => currentWindows.map((item) => item.id === id ? { ...item, minimized: true } : item));
+
+  const registerNativeVideo = (video: HTMLVideoElement) => {
+    nativeVideoRef.current = video;
+    video.playbackRate = videoPlaybackRate;
+    Array.from(video.textTracks).forEach((track) => { track.mode = captionsEnabled ? "showing" : "hidden"; });
+    updateActiveBrowserTab((tab) => ({ ...tab, loading: false }));
+  };
+
+  const togglePictureInPicture = async () => {
+    const video = nativeVideoRef.current;
+    if (!video || !document.pictureInPictureEnabled) { setVideoControlNote("画中画仅适用于当前标签中的公开原生视频或 HLS 流。嵌入平台由其自身播放器控制。 "); return; }
+    try {
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else await video.requestPictureInPicture();
+      setVideoControlNote("");
+    } catch {
+      setVideoControlNote("此视频拒绝进入画中画，可能受浏览器权限、来源策略或平台限制。 ");
+    }
+  };
+
+  const toggleCaptions = () => {
+    const video = nativeVideoRef.current;
+    if (!video || !video.textTracks.length) { setVideoControlNote("当前视频未提供可访问的字幕轨道。可粘贴公开 .vtt 字幕地址后再开启。 "); return; }
+    setCaptionsEnabled((enabled) => !enabled);
+  };
+
+  const reportCurrentVideo = () => {
+    if (!activeBrowserTab || activeBrowserTab.mode !== "video") return;
+    const report: VideoPlaybackReport = { id: `video-report-${Date.now()}`, url: activeBrowserTab.url, title: activeBrowserTab.title, provider: activeBrowserTab.videoSource?.provider ?? "未知来源", reportedAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) };
+    setVideoPlaybackReports((items) => [report, ...items.filter((item) => item.url !== report.url)].slice(0, 30));
+    setVideoReportStatus("sending");
+    videoReportMutation.mutate({ url: report.url, title: report.title, provider: report.provider, reason: "playback_failed" });
+  };
 
   const normalizeUrl = (value: string) => {
     const trimmed = value.trim();
@@ -1001,6 +1093,14 @@ export default function Home() {
     setHistoryOpen(false);
     setDownloadsOpen(false);
     setReaderLinkFilter("");
+    setVideoError(null);
+  };
+
+  const resumeRecentVideo = (item: RecentVideo) => {
+    const videoSource = resolveBrowserVideo(item.url);
+    if (!videoSource) { openInReader(item.url, item.title); return; }
+    updateActiveBrowserTab((tab) => appendBrowserRoute(tab, { url: item.url, address: item.url, title: item.title, mode: "video", videoSource }, videoSource.kind !== "restricted"));
+    setRecentVideosOpen(false);
     setVideoError(null);
   };
 
@@ -1488,6 +1588,7 @@ export default function Home() {
                   <button className={`browser-groups-toggle ${groupsOpen ? "active" : ""}`} aria-label="管理标签页分组" onClick={() => { setGroupsOpen(!groupsOpen); setBookmarksOpen(false); }}><LayoutGrid size={14} /><span>分组</span></button>
                   <button className={`browser-bookmarks-toggle ${bookmarksOpen ? "active" : ""}`} aria-label="打开书签收藏夹" onClick={() => { setBookmarksOpen(!bookmarksOpen); setGroupsOpen(false); }}><Bookmark size={14} /><span>收藏</span></button>
                   <button className={`browser-bookmarks-toggle ${historyOpen ? "active" : ""}`} aria-label="打开浏览历史" onClick={() => { setHistoryOpen(!historyOpen); setBookmarksOpen(false); setGroupsOpen(false); setDownloadsOpen(false); }}><History size={14} /><span>历史</span></button>
+                  <button className={`browser-bookmarks-toggle ${recentVideosOpen ? "active" : ""}`} aria-label="打开最近播放" onClick={() => { setRecentVideosOpen(!recentVideosOpen); setBookmarksOpen(false); setGroupsOpen(false); setDownloadsOpen(false); setHistoryOpen(false); }}><Play size={14} /><span>最近</span></button>
                   <button className={`browser-bookmarks-toggle ${downloadsOpen ? "active" : ""}`} aria-label="打开下载项" onClick={() => { setDownloadsOpen(!downloadsOpen); setBookmarksOpen(false); setGroupsOpen(false); setHistoryOpen(false); }}><Download size={14} /><span>下载</span></button>
                 </div>
                 <form className="browser-toolbar" onSubmit={(event) => { event.preventDefault(); navigateBrowser(activeBrowserTab.address); }}>
@@ -1507,7 +1608,8 @@ export default function Home() {
                   ) : activeBrowserTab.mode === "video" ? (
                     <section className="browser-video-page">
                       <header><div><span className="eyebrow">当前标签 · 视频播放</span><h2>{activeBrowserTab.title}</h2><p>{activeBrowserTab.videoSource?.provider ?? "视频"} · {activeBrowserTab.videoSource?.kind === "restricted" ? "此服务的播放策略需要网页模式。" : "正在尝试在浏览器内播放。"}</p></div><div className="media-actions"><button onClick={() => stepBrowserHistory(-1)} disabled={activeBrowserTab.historyIndex === 0}><ArrowLeft size={14} /> 返回上一页</button><button onClick={() => openInReader(activeBrowserTab.url, `阅读：${activeBrowserTab.title}`)}><FileText size={14} /> 兼容阅读</button><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", title: labelFromUrl(tab.url), loading: true }))}><Globe2 size={14} /> 网页模式</button></div></header>
-                      <div className="browser-video-stage">{videoError ? <div className="browser-video-error"><CircleHelp size={26} /><strong>该视频暂时无法在内置播放器中打开</strong><span>{videoError}</span><button onClick={() => openInReader(activeBrowserTab.url, `阅读：${activeBrowserTab.title}`)}>进入兼容阅读</button><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", loading: true }))}>尝试网页模式</button></div> : activeBrowserTab.videoSource?.kind === "restricted" ? <div className="browser-video-error"><CircleHelp size={26} /><strong>{activeBrowserTab.videoSource.provider} 需要网页模式</strong><span>{activeBrowserTab.videoSource.restriction}</span><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", loading: true }))}>在当前标签打开官网</button><button onClick={() => openInReader(activeBrowserTab.url, `阅读：${activeBrowserTab.title}`)}>查看公开页面信息</button></div> : activeBrowserTab.videoSource?.kind === "direct" ? <video key={`${activeBrowserTab.url}-${activeBrowserTab.reloadNonce}`} controls autoPlay playsInline src={activeBrowserTab.videoSource.src} onLoadedData={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} onError={() => { setVideoError("该视频资源拒绝播放、需要登录、跨域授权或暂时不可用。你仍可尝试网页模式或兼容阅读。"); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} /> : activeBrowserTab.videoSource?.kind === "hls" ? <HlsVideoPlayer key={`${activeBrowserTab.url}-${activeBrowserTab.reloadNonce}`} src={activeBrowserTab.videoSource.src} onReady={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} onError={(message) => { setVideoError(message); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} /> : <iframe key={`${activeBrowserTab.url}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 视频播放器" src={activeBrowserTab.videoSource?.src} allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} onError={() => { setVideoError("视频网站拒绝嵌入、需要登录或暂时不可用。可切换网页模式，或者在兼容阅读中查看页面信息。"); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} />}</div>
+                      <div className="video-control-bar"><label><Gauge size={14} />速度<select aria-label="视频播放速度" value={videoPlaybackRate} disabled={activeBrowserTab.videoSource?.kind !== "direct" && activeBrowserTab.videoSource?.kind !== "hls"} onChange={(event) => setVideoPlaybackRate(Number(event.target.value))}><option value={0.75}>0.75×</option><option value={1}>1×</option><option value={1.25}>1.25×</option><option value={1.5}>1.5×</option><option value={2}>2×</option></select></label><button aria-label="切换画中画" disabled={activeBrowserTab.videoSource?.kind !== "direct" && activeBrowserTab.videoSource?.kind !== "hls"} onClick={() => void togglePictureInPicture()}><Maximize2 size={14} />画中画</button><button aria-label="切换字幕" disabled={activeBrowserTab.videoSource?.kind !== "direct" && activeBrowserTab.videoSource?.kind !== "hls"} onClick={toggleCaptions}><MessageSquareText size={14} />{captionsEnabled ? "字幕开" : "字幕关"}</button><label className="video-subtitle-input"><span>VTT</span><input aria-label="公开 VTT 字幕地址" value={videoSubtitleUrl} disabled={activeBrowserTab.videoSource?.kind !== "direct" && activeBrowserTab.videoSource?.kind !== "hls"} onChange={(event) => setVideoSubtitleUrl(event.target.value.trim())} placeholder="可选字幕地址" /></label>{videoControlNote ? <small>{videoControlNote}</small> : activeBrowserTab.videoSource?.kind === "embed" ? <small>播放速度、字幕与画中画由该平台的嵌入播放器提供。</small> : null}</div>
+                      <div className="browser-video-stage">{videoError ? <div className="browser-video-error"><CircleHelp size={26} /><strong>该视频暂时无法在内置播放器中打开</strong><span>{videoError}</span><button onClick={() => openInReader(activeBrowserTab.url, `阅读：${activeBrowserTab.title}`)}>进入兼容阅读</button><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", loading: true }))}>尝试网页模式</button><button className="video-report-action" disabled={videoReportStatus === "sending"} onClick={reportCurrentVideo}>{videoReportStatus === "reported" ? "已记录此链接" : videoReportStatus === "sending" ? "正在报告…" : "报告无法播放链接"}</button></div> : activeBrowserTab.videoSource?.kind === "restricted" ? <div className="browser-video-error"><CircleHelp size={26} /><strong>{activeBrowserTab.videoSource.provider} 需要网页模式</strong><span>{activeBrowserTab.videoSource.restriction}</span><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", loading: true }))}>在当前标签打开官网</button><button onClick={() => openInReader(activeBrowserTab.url, `阅读：${activeBrowserTab.title}`)}>查看公开页面信息</button><button className="video-report-action" disabled={videoReportStatus === "sending"} onClick={reportCurrentVideo}>{videoReportStatus === "reported" ? "已记录此链接" : videoReportStatus === "sending" ? "正在报告…" : "报告无法播放链接"}</button></div> : activeBrowserTab.videoSource?.kind === "direct" ? <NativeVideoPlayer key={`${activeBrowserTab.url}-${activeBrowserTab.reloadNonce}`} src={activeBrowserTab.videoSource.src} playbackRate={videoPlaybackRate} subtitleUrl={videoSubtitleUrl} onReady={registerNativeVideo} onError={() => { setVideoError("该视频资源拒绝播放、需要登录、跨域授权或暂时不可用。你仍可尝试网页模式或兼容阅读。"); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} /> : activeBrowserTab.videoSource?.kind === "hls" ? <HlsVideoPlayer key={`${activeBrowserTab.url}-${activeBrowserTab.reloadNonce}`} src={activeBrowserTab.videoSource.src} playbackRate={videoPlaybackRate} subtitleUrl={videoSubtitleUrl} onReady={registerNativeVideo} onError={(message) => { setVideoError(message); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} /> : <iframe key={`${activeBrowserTab.url}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 视频播放器" src={activeBrowserTab.videoSource?.src} allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} onError={() => { setVideoError("视频网站拒绝嵌入、需要登录或暂时不可用。可切换网页模式，或者在兼容阅读中查看页面信息。"); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} />}</div>
                       <footer><Play size={14} /><span>当前标签支持公开视频、HLS、YouTube、Bilibili、Vimeo、Dailymotion、Twitch、Loom、Streamable、TED 与 Internet Archive 的公开嵌入；会员、DRM、登录、地区及反嵌入限制仍由原网站控制。</span></footer>
                     </section>
                   ) : activeBrowserTab.mode === "reader" ? (
@@ -1524,6 +1626,7 @@ export default function Home() {
                   ) : <><iframe key={`${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 浏览器内容" src={activeBrowserTab.url} sandbox="allow-forms allow-scripts allow-same-origin" referrerPolicy="strict-origin-when-cross-origin" onLoad={() => { setFrameStatus("loaded"); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} /><div className={`browser-frame-note ${frameStatus}`}><CircleHelp size={13} /><span>{frameStatus === "loading" ? "正在连接直连页面；若网站阻止嵌入，会自动给出当前标签导航入口。" : frameStatus === "restricted" ? "该页面长时间未能嵌入，可能被网站安全策略限制。使用站内导航可继续留在当前标签。" : "直连页面已加载；跨站 iframe 不能安全接管页面的 target=_blank 点击。若站内卡片点不开，使用站内导航即可在当前标签继续打开。"}</span><button onClick={() => openInReader(activeBrowserTab.url, `导航：${activeBrowserTab.title}`)}>站内导航</button></div></>}
                   {bookmarksOpen && <aside className="bookmark-drawer"><header><div><Bookmark size={15} /><span>收藏夹</span></div><button aria-label="关闭收藏夹" onClick={() => setBookmarksOpen(false)}><X size={14} /></button></header>{bookmarks.length ? <div className="bookmark-list">{bookmarks.map((bookmark) => <button key={bookmark.id} onClick={() => openBookmark(bookmark)}><Globe2 size={14} /><span><b>{bookmark.title}</b><small>{labelFromUrl(bookmark.url)}</small></span></button>)}</div> : <div className="bookmark-empty"><Bookmark size={18} /><span>还没有收藏的页面</span></div>}</aside>}
                   {historyOpen && <aside className="bookmark-drawer browser-history-drawer"><header><div><History size={15} /><span>浏览历史</span></div><button aria-label="关闭浏览历史" onClick={() => setHistoryOpen(false)}><X size={14} /></button></header>{browserHistoryEntries.length ? <div className="bookmark-list">{browserHistoryEntries.map((entry) => <button key={entry.id} onClick={() => entry.mode === "search" ? void fetchBrowserSearch(entry.address.replace(/^search:/, "")) : entry.mode === "reader" ? openInReader(entry.address, entry.title) : navigateBrowser(entry.address)}><History size={14} /><span><b>{entry.title}</b><small>{entry.visitedAt} · {labelFromUrl(entry.address.replace(/^search:/, ""))}</small></span></button>)}</div> : <div className="bookmark-empty"><History size={18} /><span>还没有浏览记录</span></div>}<footer><button onClick={() => setBrowserHistoryEntries([])}>清除历史记录</button></footer></aside>}
+                  {recentVideosOpen && <aside className="bookmark-drawer browser-history-drawer"><header><div><Play size={15} /><span>最近播放</span></div><button aria-label="关闭最近播放" onClick={() => setRecentVideosOpen(false)}><X size={14} /></button></header>{recentVideos.length ? <div className="bookmark-list">{recentVideos.map((item) => <button key={item.id} onClick={() => resumeRecentVideo(item)}><Play size={14} /><span><b>{item.title}</b><small>{item.provider} · {item.watchedAt}</small></span></button>)}</div> : <div className="bookmark-empty"><Play size={18} /><span>播放过的视频会出现在这里</span></div>}<footer><button onClick={() => setRecentVideos([])}>清空最近播放</button></footer></aside>}
                   {downloadsOpen && <aside className="bookmark-drawer browser-history-drawer"><header><div><Download size={15} /><span>下载项</span></div><button aria-label="关闭下载项" onClick={() => setDownloadsOpen(false)}><X size={14} /></button></header>{browserDownloads.length ? <div className="bookmark-list">{browserDownloads.map((item) => <button key={item.id} onClick={() => { setPreviewFilePath(`${VIRTUAL_HOME}/Downloads/${item.title}`); openApp("finder"); }}><FileText size={14} /><span><b>{item.title}</b><small>{item.createdAt} · {item.status}</small></span></button>)}</div> : <div className="bookmark-empty"><Download size={18} /><span>在兼容阅读页面点“保存到下载项”即可添加</span></div>}<footer><button onClick={() => setBrowserDownloads([])}>清空下载记录</button></footer></aside>}
                   {groupsOpen && <aside className="group-drawer"><header><div><LayoutGrid size={15} /><span>标签页分组</span></div><button aria-label="关闭标签分组" onClick={() => setGroupsOpen(false)}><X size={14} /></button></header><div className="group-drawer-actions"><button onClick={createTabGroup}><Plus size={14} /> 用当前标签新建分组</button><button onClick={() => assignTabToGroup(undefined)} disabled={!activeBrowserTab.groupId}><X size={14} /> 移出当前分组</button></div><div className="group-drawer-list">{browserTabGroups.length ? browserTabGroups.map((group) => <section key={group.id}><div className="group-drawer-row"><i style={{ background: group.color }} /><input value={group.title} aria-label="分组名称" onChange={(event) => renameGroup(group.id, event.target.value)} onBlur={(event) => { if (!event.target.value.trim()) renameGroup(group.id, "未命名分组"); }} /><button aria-label={`将当前标签移入 ${group.title}`} onClick={() => assignTabToGroup(group.id)}><ChevronRight size={13} /></button><button aria-label={`删除 ${group.title}`} onClick={() => removeTabGroup(group.id)}><Trash2 size={12} /></button></div><small>{groupedTabs(group.id).length} 个标签页 · 拖放标签也可加入</small></section>) : <div className="group-empty"><LayoutGrid size={18} /><span>先从当前标签创建一个工作组</span></div>}</div></aside>}
                 </div>

@@ -22,6 +22,15 @@ export const users = mysqlTable("users", {
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 
+export const videoPlaybackReports = mysqlTable("video_playback_reports", {
+  id: int("id").autoincrement().primaryKey(),
+  url: varchar("url", { length: 2048 }).notNull(),
+  title: varchar("title", { length: 512 }).notNull(),
+  provider: varchar("provider", { length: 128 }).notNull(),
+  reason: varchar("reason", { length: 128 }).notNull().default("playback_failed"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 

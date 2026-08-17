@@ -3,24 +3,27 @@ import { useEffect, useRef } from "react";
 
 type HlsVideoPlayerProps = {
   src: string;
-  onReady: () => void;
+  playbackRate?: number;
+  subtitleUrl?: string;
+  onReady: (video: HTMLVideoElement) => void;
   onError: (message: string) => void;
 };
 
-export function HlsVideoPlayer({ src, onReady, onError }: HlsVideoPlayerProps) {
+export function HlsVideoPlayer({ src, playbackRate = 1, subtitleUrl = "", onReady, onError }: HlsVideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const onReadyRef = useRef(onReady);
   const onErrorRef = useRef(onError);
 
   useEffect(() => { onReadyRef.current = onReady; }, [onReady]);
   useEffect(() => { onErrorRef.current = onError; }, [onError]);
+  useEffect(() => { if (videoRef.current) videoRef.current.playbackRate = playbackRate; }, [playbackRate]);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
     let hls: Hls | null = null;
     const startPlayback = () => {
-      onReadyRef.current();
+      onReadyRef.current(video);
       void video.play().catch(() => undefined);
     };
     if (video.canPlayType("application/vnd.apple.mpegurl")) {
@@ -47,5 +50,5 @@ export function HlsVideoPlayer({ src, onReady, onError }: HlsVideoPlayerProps) {
     return () => hls?.destroy();
   }, [src]);
 
-  return <video ref={videoRef} controls autoPlay playsInline aria-label="HLS 视频播放器" />;
+  return <video ref={videoRef} controls autoPlay playsInline aria-label="HLS 视频播放器">{subtitleUrl ? <track key={subtitleUrl} kind="subtitles" src={subtitleUrl} srcLang="zh" label="字幕" default /> : null}</video>;
 }
