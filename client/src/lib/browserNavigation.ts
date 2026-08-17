@@ -7,7 +7,7 @@ export type NavigationRoute = {
   mode: NavigationMode;
 };
 
-export function appendNavigationRoute(history: NavigationRoute[], historyIndex: number, route: NavigationRoute) {
+export function appendNavigationRoute<T extends NavigationRoute>(history: T[], historyIndex: number, route: T) {
   const current = history[historyIndex];
   if (current?.url === route.url && current.mode === route.mode) {
     return { history: [...history.slice(0, historyIndex), route, ...history.slice(historyIndex + 1)], historyIndex };

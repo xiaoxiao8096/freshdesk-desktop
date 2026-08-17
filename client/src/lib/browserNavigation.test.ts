@@ -27,4 +27,10 @@ describe("appendNavigationRoute", () => {
     expect(afterVideo.history.map((route) => route.url)).toEqual([home.url, article.url, video.url]);
     expect(afterVideo.historyIndex).toBe(2);
   });
+
+  it("retains platform-specific video metadata through the navigation stack", () => {
+    const route = { url: "https://example.com/live.m3u8", mode: "video" as const, sourceKind: "hls" };
+    const result = appendNavigationRoute([], -1, route);
+    expect(result.history[0]).toEqual(route);
+  });
 });

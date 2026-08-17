@@ -6,6 +6,7 @@ import { trpc } from "@/lib/trpc";
 import { searchVirtualFiles } from "@/lib/finderSearch";
 import { appendNavigationRoute } from "@/lib/browserNavigation";
 import { resolveBrowserVideo, type BrowserVideoSource } from "@/lib/browserVideo";
+import { HlsVideoPlayer } from "@/components/HlsVideoPlayer";
 import {
   Archive,
   ArrowLeft,
@@ -85,6 +86,7 @@ type BrowserRoute = {
   address?: string;
   title?: string;
   mode: Exclude<BrowserMode, "media">;
+  videoSource?: BrowserVideoSource;
 };
 
 type BrowserTab = {
@@ -985,15 +987,15 @@ export default function Home() {
 
   const appendBrowserRoute = (tab: BrowserTab, route: BrowserRoute, loading = true) => {
     const { history, historyIndex } = appendNavigationRoute(tab.history, tab.historyIndex, route);
-    return { ...tab, title: route.title || labelFromUrl(route.url), address: route.address ?? route.url, url: route.url, mode: route.mode, history, historyIndex, loading, searchError: "" };
+    return { ...tab, title: route.title || labelFromUrl(route.url), address: route.address ?? route.url, url: route.url, mode: route.mode, videoSource: route.videoSource, history, historyIndex, loading, searchError: "" };
   };
 
   const openInReader = (url: string, title?: string) => {
     const nextUrl = normalizeUrl(url);
     const videoSource = resolveBrowserVideo(nextUrl);
     updateActiveBrowserTab((tab) => {
-      const route: BrowserRoute = { url: nextUrl, address: nextUrl, title: title || (videoSource?.title ?? `阅读：${labelFromUrl(nextUrl)}`), mode: videoSource ? "video" : "reader" };
-      return { ...appendBrowserRoute(tab, route), videoSource: videoSource ?? undefined };
+      const route: BrowserRoute = { url: nextUrl, address: nextUrl, title: title || (videoSource?.title ?? `阅读：${labelFromUrl(nextUrl)}`), mode: videoSource ? "video" : "reader", videoSource: videoSource ?? undefined };
+      return { ...appendBrowserRoute(tab, route, videoSource?.kind === "restricted" ? false : true), videoSource: videoSource ?? undefined };
     });
     setBookmarksOpen(false);
     setHistoryOpen(false);
@@ -1048,8 +1050,8 @@ export default function Home() {
     const nextUrl = normalizeUrl(value);
     const videoSource = resolveBrowserVideo(nextUrl);
     updateActiveBrowserTab((tab) => {
-      const route: BrowserRoute = { url: nextUrl, address: nextUrl, title: videoSource?.title ?? `阅读：${labelFromUrl(nextUrl)}`, mode: videoSource ? "video" : "reader" };
-      return { ...appendBrowserRoute(tab, route), videoSource: videoSource ?? undefined };
+      const route: BrowserRoute = { url: nextUrl, address: nextUrl, title: videoSource?.title ?? `阅读：${labelFromUrl(nextUrl)}`, mode: videoSource ? "video" : "reader", videoSource: videoSource ?? undefined };
+      return { ...appendBrowserRoute(tab, route, videoSource?.kind === "restricted" ? false : true), videoSource: videoSource ?? undefined };
     });
     setVideoError(null);
   };
@@ -1105,7 +1107,7 @@ export default function Home() {
       const nextIndex = tab.historyIndex + direction;
       if (nextIndex < 0 || nextIndex >= tab.history.length) return tab;
       const route = tab.history[nextIndex];
-      return { ...tab, title: route.title || labelFromUrl(route.url), address: route.address ?? route.url, url: route.url, historyIndex: nextIndex, loading: true, mode: route.mode, searchError: "" };
+      return { ...tab, title: route.title || labelFromUrl(route.url), address: route.address ?? route.url, url: route.url, historyIndex: nextIndex, loading: route.videoSource?.kind === "restricted" ? false : true, mode: route.mode, videoSource: route.videoSource, searchError: "" };
     });
   };
 
@@ -1504,7 +1506,9 @@ export default function Home() {
                       <header><div><span className="eyebrow">当前标签 · 图片查看</span><h2>{activeBrowserTab.title}</h2><p>{activeBrowserTab.mediaItems?.length ? `${(activeBrowserTab.mediaIndex ?? 0) + 1} / ${activeBrowserTab.mediaItems.length} · 图片留在当前标签中查看` : "公开图片资源"}</p></div><div className="media-actions"><button onClick={returnToReader}><ArrowLeft size={14} /> 返回文章</button><button onClick={downloadCurrentImage}><Download size={14} /> 下载到 Finder</button><button onClick={() => setMediaZoom((value) => Math.max(60, value - 20))} aria-label="缩小图片"><ZoomOut size={15} /></button><span>{mediaZoom}%</span><button onClick={() => setMediaZoom((value) => Math.min(220, value + 20))} aria-label="放大图片"><ZoomIn size={15} /></button></div></header><div className="browser-media-stage"><button aria-label="上一张图片" disabled={(activeBrowserTab.mediaItems?.length ?? 0) < 2} onClick={() => stepReaderImage(-1)}><ChevronLeft size={22} /></button><figure>{mediaImageError ? <div className="browser-media-error"><CircleHelp size={24} /><strong>图片暂时无法加载</strong><span>{mediaImageError}</span><button onClick={() => setMediaImageError(null)}>重试</button></div> : <img src={activeBrowserTab.url} alt={activeBrowserTab.title} style={{ transform: `scale(${mediaZoom / 100})` }} onError={() => setMediaImageError("该图片来源拒绝了嵌入或暂时不可用。可返回文章继续阅读其他内容。")} />}<figcaption>{activeBrowserTab.title}</figcaption></figure><button aria-label="下一张图片" disabled={(activeBrowserTab.mediaItems?.length ?? 0) < 2} onClick={() => stepReaderImage(1)}><ChevronRight size={22} /></button></div><div className="browser-media-strip">{activeBrowserTab.mediaItems?.map((item, index) => <button key={item.src} className={index === activeBrowserTab.mediaIndex ? "active" : ""} onClick={() => { updateActiveBrowserTab((tab) => ({ ...tab, mediaIndex: index, title: item.alt || "网页图片", address: item.src, url: item.src })); setMediaImageError(null); }}><img src={item.src} alt={item.alt} /></button>)}</div></section>
                   ) : activeBrowserTab.mode === "video" ? (
                     <section className="browser-video-page">
-                      <header><div><span className="eyebrow">当前标签 · 视频播放</span><h2>{activeBrowserTab.title}</h2><p>{activeBrowserTab.videoSource?.provider ?? "视频"} · 正在尝试在浏览器内播放。</p></div><div className="media-actions"><button onClick={() => stepBrowserHistory(-1)} disabled={activeBrowserTab.historyIndex === 0}><ArrowLeft size={14} /> 返回上一页</button><button onClick={() => openInReader(activeBrowserTab.url, `阅读：${activeBrowserTab.title}`)}><FileText size={14} /> 兼容阅读</button><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", title: labelFromUrl(tab.url), loading: true }))}><Globe2 size={14} /> 网页模式</button></div></header><div className="browser-video-stage">{videoError ? <div className="browser-video-error"><CircleHelp size={26} /><strong>该视频暂时无法在内置播放器中打开</strong><span>{videoError}</span><button onClick={() => openInReader(activeBrowserTab.url, `阅读：${activeBrowserTab.title}`)}>进入兼容阅读</button><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", loading: true }))}>尝试网页模式</button></div> : activeBrowserTab.videoSource?.kind === "direct" ? <video key={`${activeBrowserTab.url}-${activeBrowserTab.reloadNonce}`} controls autoPlay playsInline src={activeBrowserTab.videoSource.src} onLoadedData={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} onError={() => { setVideoError("该视频资源拒绝播放、需要登录，或暂时不可用。你仍可尝试网页模式或兼容阅读。"); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} /> : <iframe key={`${activeBrowserTab.url}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 视频播放器" src={activeBrowserTab.videoSource?.src} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} onError={() => { setVideoError("视频网站拒绝嵌入或需要登录。可切换网页模式，或者在兼容阅读中查看页面信息。"); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} />}</div><footer><Play size={14} /><span>公开视频与允许嵌入的 YouTube、Bilibili、Vimeo 链接会在当前标签播放；其他网站的 DRM、登录或嵌入限制由网站自身控制。</span></footer>
+                      <header><div><span className="eyebrow">当前标签 · 视频播放</span><h2>{activeBrowserTab.title}</h2><p>{activeBrowserTab.videoSource?.provider ?? "视频"} · {activeBrowserTab.videoSource?.kind === "restricted" ? "此服务的播放策略需要网页模式。" : "正在尝试在浏览器内播放。"}</p></div><div className="media-actions"><button onClick={() => stepBrowserHistory(-1)} disabled={activeBrowserTab.historyIndex === 0}><ArrowLeft size={14} /> 返回上一页</button><button onClick={() => openInReader(activeBrowserTab.url, `阅读：${activeBrowserTab.title}`)}><FileText size={14} /> 兼容阅读</button><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", title: labelFromUrl(tab.url), loading: true }))}><Globe2 size={14} /> 网页模式</button></div></header>
+                      <div className="browser-video-stage">{videoError ? <div className="browser-video-error"><CircleHelp size={26} /><strong>该视频暂时无法在内置播放器中打开</strong><span>{videoError}</span><button onClick={() => openInReader(activeBrowserTab.url, `阅读：${activeBrowserTab.title}`)}>进入兼容阅读</button><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", loading: true }))}>尝试网页模式</button></div> : activeBrowserTab.videoSource?.kind === "restricted" ? <div className="browser-video-error"><CircleHelp size={26} /><strong>{activeBrowserTab.videoSource.provider} 需要网页模式</strong><span>{activeBrowserTab.videoSource.restriction}</span><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", loading: true }))}>在当前标签打开官网</button><button onClick={() => openInReader(activeBrowserTab.url, `阅读：${activeBrowserTab.title}`)}>查看公开页面信息</button></div> : activeBrowserTab.videoSource?.kind === "direct" ? <video key={`${activeBrowserTab.url}-${activeBrowserTab.reloadNonce}`} controls autoPlay playsInline src={activeBrowserTab.videoSource.src} onLoadedData={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} onError={() => { setVideoError("该视频资源拒绝播放、需要登录、跨域授权或暂时不可用。你仍可尝试网页模式或兼容阅读。"); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} /> : activeBrowserTab.videoSource?.kind === "hls" ? <HlsVideoPlayer key={`${activeBrowserTab.url}-${activeBrowserTab.reloadNonce}`} src={activeBrowserTab.videoSource.src} onReady={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} onError={(message) => { setVideoError(message); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} /> : <iframe key={`${activeBrowserTab.url}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 视频播放器" src={activeBrowserTab.videoSource?.src} allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} onError={() => { setVideoError("视频网站拒绝嵌入、需要登录或暂时不可用。可切换网页模式，或者在兼容阅读中查看页面信息。"); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} />}</div>
+                      <footer><Play size={14} /><span>当前标签支持公开视频、HLS、YouTube、Bilibili、Vimeo、Dailymotion、Twitch、Loom、Streamable、TED 与 Internet Archive 的公开嵌入；会员、DRM、登录、地区及反嵌入限制仍由原网站控制。</span></footer>
                     </section>
                   ) : activeBrowserTab.mode === "reader" ? (
                     <section className="browser-reader-page">
