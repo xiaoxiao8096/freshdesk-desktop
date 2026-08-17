@@ -2,6 +2,7 @@
  * 设计提醒：雾面硬件主义。以桌面空间关系组织内容，所有反馈要像精密设备一样安静、迅速、可信。
  */
 import { useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { trpc } from "@/lib/trpc";
 import {
   Archive,
   ArrowLeft,
@@ -18,14 +19,17 @@ import {
   CloudSun,
   Command,
   Compass,
+  Download,
   Droplets,
   FilePlus2,
+  FileText,
   Folder,
   FolderOpen,
   Gauge,
   Globe2,
   Grid2X2,
   Headphones,
+  History,
   Image,
   LayoutGrid,
   ListTodo,
@@ -39,6 +43,7 @@ import {
   Music2,
   Pause,
   Palette,
+  Pencil,
   Play,
   Pin,
   Plus,
@@ -103,6 +108,22 @@ type BrowserBookmark = {
   id: string;
   title: string;
   url: string;
+};
+
+type BrowserHistoryEntry = {
+  id: string;
+  title: string;
+  address: string;
+  visitedAt: string;
+  mode: "web" | "search" | "reader";
+};
+
+type BrowserDownload = {
+  id: string;
+  title: string;
+  url: string;
+  createdAt: string;
+  status: "已保存" | "准备就绪";
 };
 
 type NoteDocument = {
@@ -200,7 +221,7 @@ const photoItems: PhotoItem[] = [
 
 const VIRTUAL_HOME = "/Users/freshdesk";
 const initialVirtualFileSystem: VirtualFileSystem = {
-  directories: [VIRTUAL_HOME, `${VIRTUAL_HOME}/Desktop`, `${VIRTUAL_HOME}/Documents`, `${VIRTUAL_HOME}/Documents/Projects`, `${VIRTUAL_HOME}/Music`, `${VIRTUAL_HOME}/Pictures`],
+  directories: [VIRTUAL_HOME, `${VIRTUAL_HOME}/Desktop`, `${VIRTUAL_HOME}/Documents`, `${VIRTUAL_HOME}/Documents/Projects`, `${VIRTUAL_HOME}/Downloads`, `${VIRTUAL_HOME}/Music`, `${VIRTUAL_HOME}/Pictures`],
   files: [`${VIRTUAL_HOME}/README.md`, `${VIRTUAL_HOME}/Desktop/开机笔记.txt`, `${VIRTUAL_HOME}/Documents/工作流.md`, `${VIRTUAL_HOME}/Pictures/晨雾极光.jpg`],
 };
 
@@ -479,6 +500,7 @@ export default function Home() {
   const [terminalInput, setTerminalInput] = useState("");
   const [terminalCwd, setTerminalCwd] = useState(VIRTUAL_HOME);
   const [virtualFileSystem, setVirtualFileSystem] = useState<VirtualFileSystem>(initialVirtualFileSystem);
+  const [finderPath, setFinderPath] = useState(VIRTUAL_HOME);
   const [trashItems, setTrashItems] = useState<VirtualTrashItem[]>([]);
   const [draggedFilePath, setDraggedFilePath] = useState<string | null>(null);
   const [systemAppearance, setSystemAppearance] = useState<"light" | "dark">("dark");
@@ -495,6 +517,13 @@ export default function Home() {
     { id: "web-platform", title: "Web 平台文档", url: "https://developer.mozilla.org" },
   ]);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [downloadsOpen, setDownloadsOpen] = useState(false);
+  const [browserHistoryEntries, setBrowserHistoryEntries] = useState<BrowserHistoryEntry[]>([]);
+  const [browserDownloads, setBrowserDownloads] = useState<BrowserDownload[]>([]);
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [previewFilePath, setPreviewFilePath] = useState<string | null>(null);
   const [weatherLocationId, setWeatherLocationId] = useState("shanghai");
   const [weatherUnit, setWeatherUnit] = useState<"c" | "f">("c");
   const [weatherUpdatedAt, setWeatherUpdatedAt] = useState(() => new Date());
@@ -532,7 +561,10 @@ export default function Home() {
   const selectedPhoto = photoItems.find((item) => item.id === selectedPhotoId) ?? null;
   const currentWeather = liveWeather ?? weatherLocations.find((location) => location.id === weatherLocationId) ?? weatherLocations[0];
   const completedReminders = reminders.filter((item) => item.done).length;
-  const finderEntries = virtualDirectoryEntries(virtualFileSystem, VIRTUAL_HOME);
+  const finderEntries = virtualDirectoryEntries(virtualFileSystem, finderPath);
+  const readerInput = useMemo(() => ({ url: /^https?:\/\//i.test(activeBrowserTab?.url ?? "") ? activeBrowserTab.url : "https://example.com" }), [activeBrowserTab?.url]);
+  const readerQuery = trpc.browser.readPage.useQuery(readerInput, { enabled: activeBrowserTab?.mode === "reader" });
+  const browserUtils = trpc.useUtils();
 
   const temperature = (value: number) => weatherUnit === "c" ? `${value}°` : `${Math.round(value * 9 / 5 + 32)}°`;
   const weatherSymbol = (icon: "sun" | "cloud" | "partly", size = 18) => icon === "sun" ? <Sun size={size} /> : icon === "cloud" ? <Cloud size={size} /> : <CloudSun size={size} />;
@@ -556,6 +588,35 @@ export default function Home() {
   const restoreTrashItem = (item: VirtualTrashItem) => {
     setVirtualFileSystem((fileSystem) => fileSystem.files.includes(item.path) ? fileSystem : { ...fileSystem, files: [...fileSystem.files, item.path] });
     setTrashItems((items) => items.filter((entry) => entry.id !== item.id));
+  };
+
+  const previewableFile = (path: string) => /\.(?:txt|md|jpg|jpeg|png)$/i.test(path);
+  const previewFileText = (path: string) => {
+    const name = virtualName(path);
+    if (name === "README.md") return "# Freshdesk Drive\n\n这是桌面中的虚拟文件系统。双击文本文件即可在窗口中预览。\n\n- 可重命名\n- 可拖到回收站\n- 可从回收站恢复";
+    if (name === "开机笔记.txt") return "今天的桌面已经准备好。\n\n打开一个应用，或者写下一条新的想法。";
+    if (name === "工作流.md") return "# 工作流\n\n1. 整理今天的任务\n2. 保存网页阅读内容\n3. 在傍晚前回顾便笺";
+    if (path.startsWith(`${VIRTUAL_HOME}/Downloads/`)) return `# ${name.replace(/\.txt$/i, "")}\n\n这是从 Freshdesk 浏览器兼容阅读模式保存的网页摘录。\n\n你可以在浏览器的“下载项”中再次打开它，也可以把它拖到回收站。`;
+    return `${name}\n\n这是由终端或文件管理器创建的虚拟文本文件。`;
+  };
+  const previewFileImage = (path: string) => ({
+    [`${VIRTUAL_HOME}/Pictures/晨雾极光.jpg`]: WALLPAPER,
+  }[path] ?? WALLPAPER);
+  const changeFinderPath = (path: string) => {
+    if (!virtualFileSystem.directories.includes(path)) return;
+    setFinderPath(path);
+    setPreviewFilePath(null);
+    setRenamingPath(null);
+  };
+  const startRenameFile = (path: string) => { setRenamingPath(path); setRenameValue(virtualName(path)); };
+  const commitRenameFile = () => {
+    if (!renamingPath) return;
+    const nextName = renameValue.trim();
+    if (!nextName || nextName.includes("/")) { setRenamingPath(null); return; }
+    const nextPath = `${virtualParent(renamingPath)}/${nextName}`;
+    setVirtualFileSystem((fileSystem) => fileSystem.files.includes(nextPath) ? fileSystem : { ...fileSystem, files: fileSystem.files.map((path) => path === renamingPath ? nextPath : path) });
+    setPreviewFilePath((path) => path === renamingPath ? nextPath : path);
+    setRenamingPath(null);
   };
 
   const fetchLiveWeather = async (rawCity = weatherSearch) => {
@@ -637,6 +698,18 @@ export default function Home() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedPhotoId]);
 
+  useEffect(() => {
+    if (activeBrowserTab?.mode !== "reader") return;
+    if (readerQuery.isLoading || readerQuery.isFetching) return;
+    updateActiveBrowserTab((tab) => ({ ...tab, title: readerQuery.data?.title || tab.title, loading: false }));
+    if (readerQuery.data) recordBrowserHistory(readerQuery.data.title, readerQuery.data.url, "reader");
+  }, [readerQuery.data, readerQuery.isFetching, readerQuery.isLoading, activeBrowserTab?.id, activeBrowserTab?.mode]);
+
+  useEffect(() => {
+    if (!activeBrowserTab || activeBrowserTab.mode !== "web" || activeBrowserTab.loading || activeBrowserTab.url === "about:blank") return;
+    recordBrowserHistory(activeBrowserTab.title, activeBrowserTab.url, "web");
+  }, [activeBrowserTab?.id, activeBrowserTab?.loading, activeBrowserTab?.mode, activeBrowserTab?.title, activeBrowserTab?.url]);
+
   const bringToFront = (id: AppName) => {
     setWindows((currentWindows) => {
       const top = Math.max(25, ...currentWindows.map((item) => item.zIndex));
@@ -716,20 +789,45 @@ export default function Home() {
 
   const updateBrowserAddress = (address: string) => updateActiveBrowserTab((tab) => ({ ...tab, address }));
 
+  const recordBrowserHistory = (title: string, address: string, mode: BrowserHistoryEntry["mode"]) => {
+    if (!address || address === "about:blank") return;
+    setBrowserHistoryEntries((entries) => {
+      const next = { id: `history-${Date.now()}`, title, address, visitedAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }), mode };
+      const withoutDuplicate = entries.filter((entry) => entry.address !== address || entry.mode !== mode);
+      return [next, ...withoutDuplicate].slice(0, 36);
+    });
+  };
+
+  const openInReader = (url: string, title?: string) => {
+    const nextUrl = normalizeUrl(url);
+    updateActiveBrowserTab((tab) => {
+      const nextHistory = [...tab.history.slice(0, tab.historyIndex + 1), nextUrl];
+      return { ...tab, title: title || `阅读：${labelFromUrl(nextUrl)}`, address: nextUrl, url: nextUrl, history: nextHistory, historyIndex: nextHistory.length - 1, loading: true, mode: "reader", searchError: "" };
+    });
+    setBookmarksOpen(false);
+    setHistoryOpen(false);
+    setDownloadsOpen(false);
+  };
+
+  const saveCurrentDownload = () => {
+    if (!activeBrowserTab || activeBrowserTab.url === "about:blank") return;
+    const safeTitle = (activeBrowserTab.title || "网页摘录").replace(/[\\/:*?"<>|]/g, "-").slice(0, 64);
+    const filePath = `${VIRTUAL_HOME}/Downloads/${safeTitle}.txt`;
+    setBrowserDownloads((items) => [{ id: `download-${Date.now()}`, title: `${safeTitle}.txt`, url: activeBrowserTab.url, createdAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }), status: "已保存" }, ...items]);
+    setVirtualFileSystem((fileSystem) => fileSystem.files.includes(filePath) ? fileSystem : { ...fileSystem, files: [...fileSystem.files, filePath] });
+  };
+
   const fetchBrowserSearch = async (query: string) => {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) return;
     updateActiveBrowserTab((tab) => ({ ...tab, title: `搜索：${normalizedQuery}`, address: normalizedQuery, mode: "search", searchQuery: normalizedQuery, searchError: "", loading: true }));
     try {
-      const response = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(normalizedQuery)}&format=json&no_html=1&skip_disambig=1`);
-      if (!response.ok) throw new Error("搜索请求失败");
-      const result = await response.json() as { AbstractText?: string; AbstractURL?: string; AbstractSource?: string; Heading?: string; RelatedTopics?: ({ Text?: string; FirstURL?: string; Name?: string; Topics?: { Text?: string; FirstURL?: string }[] })[] };
-      const related = (result.RelatedTopics ?? []).flatMap((item) => item.Topics ?? [item]).filter((item): item is { Text?: string; FirstURL?: string } => Boolean(item.Text && item.FirstURL)).slice(0, 8).map((item) => ({ title: item.Text!.split(" - ")[0], snippet: item.Text!, url: item.FirstURL!, source: "DuckDuckGo" }));
-      const primary = result.AbstractURL ? [{ title: result.Heading || normalizedQuery, snippet: result.AbstractText || "打开此页面查看相关内容。", url: result.AbstractURL, source: result.AbstractSource || "DuckDuckGo" }] : [];
-      const searchResults = [...primary, ...related];
-      updateActiveBrowserTab((tab) => ({ ...tab, loading: false, mode: "search", searchResults, searchSummary: result.AbstractText || "已在窗口内完成搜索。选择一个结果后会在当前标签中打开。", searchError: searchResults.length ? "" : "该查询没有返回可直接展示的公开摘要。请尝试更具体的关键词，或输入完整网址。" }));
-    } catch {
-      updateActiveBrowserTab((tab) => ({ ...tab, loading: false, mode: "search", searchResults: [], searchError: "搜索暂时不可用，请检查网络后重试。" }));
+      const result = await browserUtils.browser.search.fetch({ query: normalizedQuery });
+      const searchResults = result.results.map((item) => ({ title: item.title, url: item.url, snippet: item.snippet, source: "兼容搜索" }));
+      updateActiveBrowserTab((tab) => ({ ...tab, loading: false, mode: "search", searchResults, searchSummary: searchResults.length ? "搜索结果可在当前标签的兼容阅读模式中继续打开。" : "未找到公开结果。可尝试更具体的关键词或输入完整网址。", searchError: "" }));
+      recordBrowserHistory(`搜索：${normalizedQuery}`, `search:${normalizedQuery}`, "search");
+    } catch (error) {
+      updateActiveBrowserTab((tab) => ({ ...tab, loading: false, mode: "search", searchResults: [], searchError: error instanceof Error ? "搜索暂时不可用，请稍后重试。" : "搜索暂时不可用，请稍后重试。" }));
     }
   };
 
@@ -747,7 +845,7 @@ export default function Home() {
     updateActiveBrowserTab((tab) => ({ ...tab, mode: "reader", loading: true, title: `阅读：${labelFromUrl(tab.url)}` }));
   };
 
-  const openBrowserSearchResult = (result: BrowserSearchResult) => navigateBrowser(result.url);
+  const openBrowserSearchResult = (result: BrowserSearchResult) => openInReader(result.url, result.title);
 
   const stepBrowserHistory = (direction: -1 | 1) => {
     updateActiveBrowserTab((tab) => {
@@ -1049,18 +1147,24 @@ export default function Home() {
               <div className="finder-body">
                 <aside className="finder-sidebar">
                   <p>个人收藏</p>
-                  <button className="sidebar-active"><FolderOpen size={15} /> 我的文件</button>
+                  <button className={finderPath === VIRTUAL_HOME ? "sidebar-active" : ""} onClick={() => changeFinderPath(VIRTUAL_HOME)}><FolderOpen size={15} /> 我的文件</button>
                   <button onClick={() => openApp("photos")}><Image size={15} /> 灵感相册</button>
-                  <button><Archive size={15} /> 下载项</button>
+                  <button className={finderPath === `${VIRTUAL_HOME}/Downloads` ? "sidebar-active" : ""} onClick={() => changeFinderPath(`${VIRTUAL_HOME}/Downloads`)}><Archive size={15} /> 下载项</button>
                   <p>位置</p>
-                  <button><CloudSun size={15} /> Freshdesk Drive</button>
+                  <button className={finderPath === `${VIRTUAL_HOME}/Pictures` ? "sidebar-active" : ""} onClick={() => changeFinderPath(`${VIRTUAL_HOME}/Pictures`)}><Image size={15} /> 图片</button>
+                  <button onClick={() => changeFinderPath(VIRTUAL_HOME)}><CloudSun size={15} /> Freshdesk Drive</button>
                 </aside>
                 <div className="finder-content">
-                  <div className="finder-toolbar"><div><ChevronLeft size={17} /><ChevronRight size={17} /></div><strong>我的文件</strong><span className="finder-toolbar-note">拖动文件到 Dock 的回收站</span><LayoutGrid size={17} /></div>
+                  <div className="finder-toolbar"><nav aria-label="文件夹导航"><button aria-label="返回上级目录" disabled={finderPath === VIRTUAL_HOME} onClick={() => changeFinderPath(virtualParent(finderPath))}><ChevronLeft size={17} /></button><button aria-label="前进目录" disabled><ChevronRight size={17} /></button></nav><strong>{finderPath === VIRTUAL_HOME ? "我的文件" : virtualName(finderPath)}</strong><span className="finder-toolbar-note">{displayVirtualPath(finderPath)} · 双击打开</span><LayoutGrid size={17} /></div>
                   <div className="folder-grid finder-grid">
-                    {finderEntries.map((entry) => entry.type === "directory" ? <button key={entry.name} className="folder-card" onDoubleClick={() => entry.name === "Desktop" ? openApp("notes") : undefined}><Folder size={44} fill="#a4c8ff" strokeWidth={1.2} /><strong>{entry.name}</strong><span>文件夹</span></button> : <button key={entry.name} className="folder-card finder-file-card" draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; setDraggedFilePath(`${VIRTUAL_HOME}/${entry.name}`); }} onDragEnd={() => setDraggedFilePath(null)}><FilePlus2 size={38} strokeWidth={1.35} /><strong>{entry.name}</strong><span>可拖到回收站</span></button>)}
+                    {finderEntries.map((entry) => {
+                      const path = `${finderPath}/${entry.name}`;
+                      if (entry.type === "directory") return <button key={path} className="folder-card" onDoubleClick={() => changeFinderPath(path)}><Folder size={44} fill="#a4c8ff" strokeWidth={1.2} /><strong>{entry.name}</strong><span>双击打开</span></button>;
+                      return <div key={entry.name} className="finder-file-wrap"><button className="folder-card finder-file-card" draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; setDraggedFilePath(path); }} onDragEnd={() => setDraggedFilePath(null)} onDoubleClick={() => previewableFile(path) && setPreviewFilePath(path)}><FilePlus2 size={38} strokeWidth={1.35} />{renamingPath === path ? <input autoFocus aria-label="重命名文件" value={renameValue} onClick={(event) => event.stopPropagation()} onChange={(event) => setRenameValue(event.target.value)} onBlur={commitRenameFile} onKeyDown={(event) => { if (event.key === "Enter") commitRenameFile(); if (event.key === "Escape") setRenamingPath(null); }} /> : <strong>{entry.name}</strong>}<span>{previewableFile(path) ? "双击预览" : "可拖到回收站"}</span></button><button className="finder-rename" aria-label={`重命名 ${entry.name}`} onClick={() => startRenameFile(path)}><Pencil size={13} /></button></div>;
+                    })}
                   </div>
-                  <div className="finder-footer"><span>{finderEntries.length} 个项目</span><span>拖放删除 · 可从回收站恢复</span></div>
+                  <div className="finder-footer"><span>{finderEntries.length} 个项目</span><span>双击预览 · 拖放删除 · 可从回收站恢复</span></div>
+                  {previewFilePath && <div className="finder-preview" role="dialog" aria-label="文件预览"><header><div><FileText size={16} /><span>{virtualName(previewFilePath)}</span></div><button aria-label="关闭文件预览" onClick={() => setPreviewFilePath(null)}><X size={15} /></button></header>{/\.(?:jpg|jpeg|png)$/i.test(previewFilePath) ? <img src={previewFileImage(previewFilePath)} alt={virtualName(previewFilePath)} /> : <pre>{previewFileText(previewFilePath)}</pre>}</div>}
                 </div>
               </div>
             </WindowChrome>
@@ -1119,6 +1223,8 @@ export default function Home() {
                   <button className="browser-tab-add" aria-label="新建标签页" onClick={() => addBrowserTab()}><Plus size={15} /></button>
                   <button className={`browser-groups-toggle ${groupsOpen ? "active" : ""}`} aria-label="管理标签页分组" onClick={() => { setGroupsOpen(!groupsOpen); setBookmarksOpen(false); }}><LayoutGrid size={14} /><span>分组</span></button>
                   <button className={`browser-bookmarks-toggle ${bookmarksOpen ? "active" : ""}`} aria-label="打开书签收藏夹" onClick={() => { setBookmarksOpen(!bookmarksOpen); setGroupsOpen(false); }}><Bookmark size={14} /><span>收藏</span></button>
+                  <button className={`browser-bookmarks-toggle ${historyOpen ? "active" : ""}`} aria-label="打开浏览历史" onClick={() => { setHistoryOpen(!historyOpen); setBookmarksOpen(false); setGroupsOpen(false); setDownloadsOpen(false); }}><History size={14} /><span>历史</span></button>
+                  <button className={`browser-bookmarks-toggle ${downloadsOpen ? "active" : ""}`} aria-label="打开下载项" onClick={() => { setDownloadsOpen(!downloadsOpen); setBookmarksOpen(false); setGroupsOpen(false); setHistoryOpen(false); }}><Download size={14} /><span>下载</span></button>
                 </div>
                 <form className="browser-toolbar" onSubmit={(event) => { event.preventDefault(); navigateBrowser(activeBrowserTab.address); }}>
                   <div className="browser-nav-controls">
@@ -1131,8 +1237,20 @@ export default function Home() {
                   <span className="browser-status">{activeBrowserTab.loading ? "正在连接" : "浏览器"}</span>
                 </form>
                 <div className="browser-frame-wrap">
-                  {activeBrowserTab.mode === "search" ? <section className="browser-search-page"><header><span className="eyebrow">Freshdesk Search</span><h2>{activeBrowserTab.searchQuery ? `“${activeBrowserTab.searchQuery}”` : "在这里搜索互联网"}</h2><p>{activeBrowserTab.searchError || activeBrowserTab.searchSummary || "输入关键词，搜索结果会保留在当前浏览器窗口中。"}</p></header>{activeBrowserTab.loading ? <div className="browser-search-loading"><RotateCw className="spinning" size={18} /> 正在检索公开摘要…</div> : activeBrowserTab.searchResults?.length ? <div className="browser-search-results">{activeBrowserTab.searchResults.map((result) => <button key={`${result.url}-${result.title}`} onClick={() => openBrowserSearchResult(result)}><span className="browser-result-top"><Globe2 size={14} /> {result.source ?? labelFromUrl(result.url)}</span><strong>{result.title}</strong><p>{result.snippet}</p><small>{labelFromUrl(result.url)}</small></button>)}</div> : <div className="browser-search-empty"><Compass size={28} /><strong>等待一个搜索词</strong><span>可输入“OpenAI”“北京天气”或任何带空格的查询；完整网址会在当前标签中直接打开。</span></div>}</section> : <><iframe key={`${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}-${activeBrowserTab.mode}`} title="Freshdesk 浏览器内容" src={activeBrowserTab.mode === "reader" ? `https://r.jina.ai/${activeBrowserTab.url}` : activeBrowserTab.url} sandbox="allow-forms allow-scripts allow-same-origin" referrerPolicy="strict-origin-when-cross-origin" onLoad={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} /><div className="browser-frame-note"><CircleHelp size={13} /><span>{activeBrowserTab.mode === "reader" ? "兼容阅读模式会在当前窗口显示页面正文；返回直连可恢复原网页尝试。" : "网页始终留在当前窗口；外部弹窗已阻止。若网页拒绝嵌入，可切换兼容阅读。"}</span><button onClick={() => activeBrowserTab.mode === "reader" ? updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", loading: true })) : openReaderMode()}>{activeBrowserTab.mode === "reader" ? "返回直连" : "兼容阅读"}</button></div></>}
+                  {activeBrowserTab.mode === "reader" ? (
+                    <section className="browser-reader-page">
+                      <header>
+                        <div><span className="eyebrow">当前标签 · 兼容阅读</span><h2>{readerQuery.data?.title || activeBrowserTab.title}</h2><p>{labelFromUrl(activeBrowserTab.url)} · 已将可读取内容与链接保留在系统内。</p></div>
+                        <div className="reader-actions"><button onClick={saveCurrentDownload}><Download size={14} /> 保存到下载项</button><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", loading: true }))}>尝试直连</button></div>
+                      </header>
+                      {readerQuery.isLoading || readerQuery.isFetching ? <div className="browser-reader-loading"><RotateCw className="spinning" size={18} /> 正在读取网页内容…</div> : readerQuery.error ? <div className="browser-reader-error"><CircleHelp size={18} /><strong>此网页暂时无法读取</strong><span>{readerQuery.error.message}</span><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", loading: true }))}>改为直连尝试</button></div> : <div className="browser-reader-content"><p className="reader-summary">{readerQuery.data?.summary}</p><div className="reader-links"><h3>页面链接</h3>{readerQuery.data?.links.length ? readerQuery.data.links.map((link) => <button key={`${link.url}-${link.title}`} onClick={() => openInReader(link.url, link.title)}><Globe2 size={14} /><span><b>{link.title}</b><small>{labelFromUrl(link.url)}</small></span><ChevronRight size={15} /></button>) : <p>没有检测到可继续访问的公开链接。</p>}</div></div>}
+                    </section>
+                  ) : activeBrowserTab.mode === "search" ? (
+                    <section className="browser-search-page"><header><span className="eyebrow">Freshdesk Search</span><h2>{activeBrowserTab.searchQuery ? `“${activeBrowserTab.searchQuery}”` : "在这里搜索互联网"}</h2><p>{activeBrowserTab.searchError || activeBrowserTab.searchSummary || "输入关键词，搜索结果会保留在当前浏览器窗口中。"}</p></header>{activeBrowserTab.loading ? <div className="browser-search-loading"><RotateCw className="spinning" size={18} /> 正在检索公开结果…</div> : activeBrowserTab.searchResults?.length ? <div className="browser-search-results">{activeBrowserTab.searchResults.map((result) => <button key={`${result.url}-${result.title}`} onClick={() => openBrowserSearchResult(result)}><span className="browser-result-top"><Globe2 size={14} /> {result.source ?? labelFromUrl(result.url)}</span><strong>{result.title}</strong><p>{result.snippet}</p><small>{labelFromUrl(result.url)} · 在当前标签打开</small></button>)}</div> : <div className="browser-search-empty"><Compass size={28} /><strong>等待一个搜索词</strong><span>可输入“163邮箱登录入口”“OpenAI”或完整网址；结果会在当前标签中继续阅读。</span></div>}</section>
+                  ) : <><iframe key={`${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 浏览器内容" src={activeBrowserTab.url} sandbox="allow-forms allow-scripts allow-same-origin" referrerPolicy="strict-origin-when-cross-origin" onLoad={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} /><div className="browser-frame-note"><CircleHelp size={13} /><span>直连页面会留在当前窗口；若站内链接要求新窗口或拒绝嵌入，请切换“兼容阅读”继续在当前标签浏览。</span><button onClick={openReaderMode}>兼容阅读</button></div></>}
                   {bookmarksOpen && <aside className="bookmark-drawer"><header><div><Bookmark size={15} /><span>收藏夹</span></div><button aria-label="关闭收藏夹" onClick={() => setBookmarksOpen(false)}><X size={14} /></button></header>{bookmarks.length ? <div className="bookmark-list">{bookmarks.map((bookmark) => <button key={bookmark.id} onClick={() => openBookmark(bookmark)}><Globe2 size={14} /><span><b>{bookmark.title}</b><small>{labelFromUrl(bookmark.url)}</small></span></button>)}</div> : <div className="bookmark-empty"><Bookmark size={18} /><span>还没有收藏的页面</span></div>}</aside>}
+                  {historyOpen && <aside className="bookmark-drawer browser-history-drawer"><header><div><History size={15} /><span>浏览历史</span></div><button aria-label="关闭浏览历史" onClick={() => setHistoryOpen(false)}><X size={14} /></button></header>{browserHistoryEntries.length ? <div className="bookmark-list">{browserHistoryEntries.map((entry) => <button key={entry.id} onClick={() => entry.mode === "search" ? void fetchBrowserSearch(entry.address.replace(/^search:/, "")) : entry.mode === "reader" ? openInReader(entry.address, entry.title) : navigateBrowser(entry.address)}><History size={14} /><span><b>{entry.title}</b><small>{entry.visitedAt} · {labelFromUrl(entry.address.replace(/^search:/, ""))}</small></span></button>)}</div> : <div className="bookmark-empty"><History size={18} /><span>还没有浏览记录</span></div>}<footer><button onClick={() => setBrowserHistoryEntries([])}>清除历史记录</button></footer></aside>}
+                  {downloadsOpen && <aside className="bookmark-drawer browser-history-drawer"><header><div><Download size={15} /><span>下载项</span></div><button aria-label="关闭下载项" onClick={() => setDownloadsOpen(false)}><X size={14} /></button></header>{browserDownloads.length ? <div className="bookmark-list">{browserDownloads.map((item) => <button key={item.id} onClick={() => { setPreviewFilePath(`${VIRTUAL_HOME}/Downloads/${item.title}`); openApp("finder"); }}><FileText size={14} /><span><b>{item.title}</b><small>{item.createdAt} · {item.status}</small></span></button>)}</div> : <div className="bookmark-empty"><Download size={18} /><span>在兼容阅读页面点“保存到下载项”即可添加</span></div>}<footer><button onClick={() => setBrowserDownloads([])}>清空下载记录</button></footer></aside>}
                   {groupsOpen && <aside className="group-drawer"><header><div><LayoutGrid size={15} /><span>标签页分组</span></div><button aria-label="关闭标签分组" onClick={() => setGroupsOpen(false)}><X size={14} /></button></header><div className="group-drawer-actions"><button onClick={createTabGroup}><Plus size={14} /> 用当前标签新建分组</button><button onClick={() => assignTabToGroup(undefined)} disabled={!activeBrowserTab.groupId}><X size={14} /> 移出当前分组</button></div><div className="group-drawer-list">{browserTabGroups.length ? browserTabGroups.map((group) => <section key={group.id}><div className="group-drawer-row"><i style={{ background: group.color }} /><input value={group.title} aria-label="分组名称" onChange={(event) => renameGroup(group.id, event.target.value)} onBlur={(event) => { if (!event.target.value.trim()) renameGroup(group.id, "未命名分组"); }} /><button aria-label={`将当前标签移入 ${group.title}`} onClick={() => assignTabToGroup(group.id)}><ChevronRight size={13} /></button><button aria-label={`删除 ${group.title}`} onClick={() => removeTabGroup(group.id)}><Trash2 size={12} /></button></div><small>{groupedTabs(group.id).length} 个标签页 · 拖放标签也可加入</small></section>) : <div className="group-empty"><LayoutGrid size={18} /><span>先从当前标签创建一个工作组</span></div>}</div></aside>}
                 </div>
               </div>
