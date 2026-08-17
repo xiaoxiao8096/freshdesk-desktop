@@ -22,6 +22,12 @@ describe("resolveBrowserVideo", () => {
     expect(resolveBrowserVideo("https://www.dailymotion.com/video/x7tgad0")).toMatchObject({ kind: "embed", provider: "Dailymotion", src: expect.stringContaining("/embed/video/x7tgad0") });
     expect(resolveBrowserVideo("https://www.loom.com/share/abc123")).toMatchObject({ kind: "embed", provider: "Loom", src: expect.stringContaining("/embed/abc123") });
     expect(resolveBrowserVideo("https://www.ted.com/talks/kate_raworth_a_healthy_economy_should_be_designed_to_thrive_not_grow")).toMatchObject({ kind: "embed", provider: "TED", src: expect.stringContaining("embed.ted.com/talks/") });
+    expect(resolveBrowserVideo("https://example.wistia.com/medias/abcde12345")).toMatchObject({ kind: "embed", provider: "Wistia", src: expect.stringContaining("fast.wistia.net/embed/iframe/abcde12345") });
+    expect(resolveBrowserVideo("https://www.facebook.com/FacebookDevelopers/videos/10152454700553553/")).toMatchObject({ kind: "embed", provider: "Facebook", src: expect.stringContaining("facebook.com/plugins/video.php") });
+  });
+
+  it("recognizes additional browser-playable direct media suffixes", () => {
+    expect(resolveBrowserVideo("https://cdn.example.com/preview.m4v?download=1")).toMatchObject({ kind: "direct", provider: "公开视频" });
   });
 
   it("adds Twitch parent domain required by its official player", () => {

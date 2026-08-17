@@ -6,7 +6,7 @@ export type BrowserVideoSource = {
   restriction?: string;
 };
 
-const directVideoPattern = /\.(mp4|webm|ogg|ogv)(?:$|[?#])/i;
+const directVideoPattern = /\.(mp4|webm|ogg|ogv|m4v|mov)(?:$|[?#])/i;
 const hlsVideoPattern = /\.m3u8(?:$|[?#])/i;
 
 const currentEmbedParent = () => typeof window === "undefined" ? "localhost" : window.location.hostname;
@@ -73,6 +73,13 @@ export function resolveBrowserVideo(url: string): BrowserVideoSource | null {
     if (host.endsWith("streamable.com")) {
       const id = parsed.pathname.match(/\/(?:e\/)?([\w-]+)$/)?.[1];
       return id ? { kind: "embed", src: `https://streamable.com/e/${id}?autoplay=1`, title: "Streamable 视频", provider: "Streamable" } : null;
+    }
+    if (host.endsWith("wistia.com") || host.endsWith("wistia.net")) {
+      const id = parsed.pathname.match(/\/(?:medias|embed\/iframe)\/([\w-]+)/)?.[1];
+      return id ? { kind: "embed", src: `https://fast.wistia.net/embed/iframe/${id}?autoPlay=true&playbackRateControl=true`, title: "Wistia 视频", provider: "Wistia" } : null;
+    }
+    if (host.endsWith("facebook.com") && /\/(?:videos|reel)\//.test(parsed.pathname) || host === "fb.watch") {
+      return { kind: "embed", src: `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(url)}&show_text=false&autoplay=true`, title: "Facebook 视频", provider: "Facebook" };
     }
     if (host.endsWith("ted.com")) {
       const slug = parsed.pathname.match(/\/talks\/([\w-]+)/)?.[1];

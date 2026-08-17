@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closeWindowById, sanitizeRestoredWindows, topVisibleWindow } from "./windowState";
+import { closeAllWindows, closeWindowById, minimizeAllWindows, orderWindowsByZIndex, sanitizeRestoredWindows, topVisibleWindow } from "./windowState";
 
 const windows = [
   { id: "finder", minimized: false, zIndex: 26 },
@@ -18,5 +18,11 @@ describe("window state", () => {
 
   it("removes duplicate entries from a restored desktop snapshot", () => {
     expect(sanitizeRestoredWindows([...windows, { id: "browser", minimized: false, zIndex: 42 }]).map((windowItem) => windowItem.id)).toEqual(["finder", "browser", "notes"]);
+  });
+
+  it("supports bulk close, bulk minimize and manager ordering", () => {
+    expect(closeAllWindows<typeof windows[number]>()).toEqual([]);
+    expect(minimizeAllWindows(windows).every((windowItem) => windowItem.minimized)).toBe(true);
+    expect(orderWindowsByZIndex(windows).map((windowItem) => windowItem.id)).toEqual(["notes", "browser", "finder"]);
   });
 });

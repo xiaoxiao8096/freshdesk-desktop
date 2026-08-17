@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { enrichBilibiliVideoTitles, extractReaderImages, extractReaderLinks, safeBrowserUrl } from "./routers/browser";
+import { enrichBilibiliVideoTitles, evaluateEmbedPolicy, extractReaderImages, extractReaderLinks, safeBrowserUrl } from "./routers/browser";
 
 describe("browser reader helpers", () => {
   it("rejects local and non-web URLs", () => {
     expect(() => safeBrowserUrl("file:///etc/passwd")).toThrow();
     expect(() => safeBrowserUrl("http://localhost:3000")).toThrow();
     expect(() => safeBrowserUrl("http://127.0.0.1")).toThrow();
+  });
+
+  it("identifies X-Frame-Options and CSP policies that forbid iframe embedding", () => {
+    expect(evaluateEmbedPolicy("DENY", null)).toMatchObject({ canEmbed: false, reason: expect.stringContaining("DENY") });
+    expect(evaluateEmbedPolicy("SAMEORIGIN", null)).toMatchObject({ canEmbed: false, reason: expect.stringContaining("自身域名") });
+    expect(evaluateEmbedPolicy(null, "default-src 'self'; frame-ancestors 'none'")).toMatchObject({ canEmbed: false, reason: expect.stringContaining("内容安全策略") });
+    expect(evaluateEmbedPolicy(null, "frame-ancestors https:")).toMatchObject({ canEmbed: true });
   });
 
   it("extracts unique absolute HTTP links from readable markup", () => {

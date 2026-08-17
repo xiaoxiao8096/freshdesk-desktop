@@ -41,6 +41,17 @@ export function safeBrowserUrl(rawUrl: string) {
   return parsed;
 }
 
+export function evaluateEmbedPolicy(xFrameOptions: string | null, contentSecurityPolicy: string | null) {
+  const xfo = (xFrameOptions ?? "").toLowerCase();
+  if (/\bdeny\b/.test(xfo)) return { canEmbed: false, reason: "该网站通过 X-Frame-Options: DENY 禁止被其他网页嵌入。" };
+  if (/\bsameorigin\b/.test(xfo)) return { canEmbed: false, reason: "该网站仅允许在自身域名内嵌入页面。" };
+  const frameAncestors = contentSecurityPolicy?.match(/(?:^|;)\s*frame-ancestors\s+([^;]+)/i)?.[1]?.trim();
+  if (frameAncestors && !/(?:^|\s)(?:\*|https:)(?:\s|$)/i.test(frameAncestors)) {
+    return { canEmbed: false, reason: "该网站的内容安全策略禁止在当前桌面窗口中嵌入。" };
+  }
+  return { canEmbed: true, reason: "未检测到阻止嵌入的响应头。" };
+}
+
 function absoluteUrl(href: string, baseUrl: string) {
   try {
     const url = new URL(href, baseUrl);
@@ -151,6 +162,26 @@ async function fetchHtml(url: string) {
   }
 }
 
+async function inspectEmbedPolicy(url: string) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const response = await fetch(url, {
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "FreshdeskDesktop/1.0 (+https://manus.com)",
+        Accept: "text/html,application/xhtml+xml",
+      },
+    });
+    const policy = evaluateEmbedPolicy(response.headers.get("x-frame-options"), response.headers.get("content-security-policy"));
+    void response.body?.cancel();
+    return { ...policy, url: response.url };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function unwrapDuckDuckGo(url: string) {
   try {
     const parsed = new URL(url, "https://html.duckduckgo.com");
@@ -161,6 +192,14 @@ function unwrapDuckDuckGo(url: string) {
 }
 
 export const browserRouter = router({
+  inspectEmbed: publicProcedure.input(browserInput).query(async ({ input }) => {
+    const parsed = safeBrowserUrl(input.url);
+    try {
+      return await inspectEmbedPolicy(parsed.toString());
+    } catch {
+      return { canEmbed: true, reason: "暂时无法预检嵌入策略，将继续尝试在当前标签加载。", url: parsed.toString() };
+    }
+  }),
   readPage: publicProcedure.input(browserInput).query(async ({ input }) => {
     const parsed = safeBrowserUrl(input.url);
     try {
