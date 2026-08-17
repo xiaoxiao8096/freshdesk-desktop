@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent
 import { trpc } from "@/lib/trpc";
 import { searchVirtualFiles } from "@/lib/finderSearch";
 import { appendNavigationRoute } from "@/lib/browserNavigation";
+import { resolveBrowserVideo, type BrowserVideoSource } from "@/lib/browserVideo";
 import {
   Archive,
   ArrowLeft,
@@ -77,7 +78,7 @@ type WindowBounds = {
 
 type SnapTarget = "left" | "right" | "top-left" | "top-right" | "bottom-left" | "bottom-right";
 
-type BrowserMode = "web" | "search" | "reader" | "media";
+type BrowserMode = "web" | "search" | "reader" | "media" | "video";
 
 type BrowserRoute = {
   url: string;
@@ -105,6 +106,7 @@ type BrowserTab = {
   mediaItems?: BrowserMediaItem[];
   mediaIndex?: number;
   readerOriginUrl?: string;
+  videoSource?: BrowserVideoSource;
 };
 
 type BrowserMediaItem = {
@@ -137,7 +139,7 @@ type BrowserHistoryEntry = {
   title: string;
   address: string;
   visitedAt: string;
-  mode: "web" | "search" | "reader";
+  mode: "web" | "search" | "reader" | "video";
 };
 
 type BrowserDownload = {
@@ -161,6 +163,12 @@ type PhotoItem = {
   alt: string;
   title: string;
   subtitle: string;
+};
+
+type WallpaperItem = {
+  id: string;
+  title: string;
+  src: string;
 };
 
 type VirtualFileSystem = {
@@ -221,6 +229,7 @@ type DesktopSnapshot = Partial<{
   setupComplete: boolean;
   windows: AppWindow[];
   activeWallpaperId: string;
+  customWallpapers: WallpaperItem[];
   notes: NoteDocument[];
   activeNoteId: string;
   virtualFileSystem: VirtualFileSystem;
@@ -255,7 +264,7 @@ const MUSIC_NIGHT = "/manus-storage/freshdesk-night-orbit_b6af35f3.mp3";
 const WALLPAPER_SOLAR = "/manus-storage/freshdesk-wallpaper-solar-drift_00688618.jpg";
 const WALLPAPER_ALPINE = "/manus-storage/freshdesk-wallpaper-alpine-cloud_56c37133.jpg";
 
-const wallpapers = [
+const wallpapers: WallpaperItem[] = [
   { id: "aurora", title: "晨雾极光", src: WALLPAPER },
   { id: "solar", title: "日光漂移", src: WALLPAPER_SOLAR },
   { id: "alpine", title: "高山云层", src: WALLPAPER_ALPINE },
@@ -385,7 +394,7 @@ function normalizeBrowserHistory(history: unknown, fallbackUrl: string, fallback
     if (!entry || typeof entry !== "object" || !("url" in entry) || typeof entry.url !== "string") return [];
     const candidate = entry as Partial<BrowserRoute>;
     const url = entry.url;
-    const mode = candidate.mode === "search" || candidate.mode === "reader" || candidate.mode === "web" ? candidate.mode : fallbackMode;
+    const mode = candidate.mode === "search" || candidate.mode === "reader" || candidate.mode === "web" || candidate.mode === "video" ? candidate.mode : fallbackMode;
     return [{ url, address: candidate.address ?? url, title: candidate.title ?? labelFromUrl(url), mode }];
   });
   return routes.length ? routes : [{ url: fallbackUrl, address: fallbackUrl === "about:blank" ? "" : fallbackUrl, title: labelFromUrl(fallbackUrl), mode: fallbackUrl === "about:blank" ? "search" : fallbackMode }];
@@ -569,6 +578,7 @@ export default function Home() {
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(150);
   const [activeWallpaperId, setActiveWallpaperId] = useState(() => restoredDesktopState?.activeWallpaperId ?? "aurora");
+  const [customWallpapers, setCustomWallpapers] = useState<WallpaperItem[]>(() => restoredDesktopState?.customWallpapers ?? []);
   const [notes, setNotes] = useState<NoteDocument[]>(() => restoredDesktopState?.notes ?? [
     { id: "welcome-note", title: "新桌面的第一天", body: "今天先从一段安静的音乐开始。\n\n桌面已经准备好了。打开任意一个应用，看看这个空间会带你去哪里。", updated: "今天" },
     { id: "try-list", title: "要尝试的事", body: "- 换一张桌面壁纸\n- 新建一张便笺\n- 把喜欢的网页放进工作组", updated: "昨天" },
@@ -609,6 +619,7 @@ export default function Home() {
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [mediaZoom, setMediaZoom] = useState(100);
   const [mediaImageError, setMediaImageError] = useState<string | null>(null);
+  const [videoError, setVideoError] = useState<string | null>(null);
   const [frameStatus, setFrameStatus] = useState<"idle" | "loading" | "loaded" | "restricted">("idle");
   const [browserHistoryEntries, setBrowserHistoryEntries] = useState<BrowserHistoryEntry[]>(() => restoredDesktopState?.browserHistoryEntries ?? []);
   const [browserDownloads, setBrowserDownloads] = useState<BrowserDownload[]>(() => restoredDesktopState?.browserDownloads ?? []);
@@ -653,7 +664,8 @@ export default function Home() {
 
   const current = tracks[currentTrack];
   const activeBrowserTab = browserTabs.find((tab) => tab.id === activeBrowserTabId) ?? browserTabs[0];
-  const activeWallpaper = wallpapers.find((wallpaper) => wallpaper.id === activeWallpaperId) ?? wallpapers[0];
+  const availableWallpapers = [...wallpapers, ...customWallpapers];
+  const activeWallpaper = availableWallpapers.find((wallpaper) => wallpaper.id === activeWallpaperId) ?? wallpapers[0];
   const activeNote = notes.find((item) => item.id === activeNoteId) ?? notes[0];
   const selectedPhoto = photoItems.find((item) => item.id === selectedPhotoId) ?? null;
   const currentWeather = liveWeather ?? weatherLocations.find((location) => location.id === weatherLocationId) ?? weatherLocations[0];
@@ -707,6 +719,15 @@ export default function Home() {
   const previewFileImage = (path: string) => fileContents[path]?.startsWith("http") ? fileContents[path] : ({
     [`${VIRTUAL_HOME}/Pictures/晨雾极光.jpg`]: WALLPAPER,
   }[path] ?? WALLPAPER);
+  const setWallpaperFromSource = (src: string, title: string) => {
+    const existing = availableWallpapers.find((wallpaper) => wallpaper.src === src);
+    const id = existing?.id ?? `custom-wallpaper-${Date.now()}`;
+    if (!existing) setCustomWallpapers((items) => [...items, { id, title, src }]);
+    setActiveWallpaperId(id);
+  };
+  const setFileAsWallpaper = (path: string) => {
+    if (isImageFile(path)) setWallpaperFromSource(previewFileImage(path), `Finder · ${virtualName(path)}`);
+  };
   const changeFinderPath = (path: string) => {
     if (!virtualFileSystem.directories.includes(path)) return;
     setFinderPath(path);
@@ -809,9 +830,9 @@ export default function Home() {
   }, [setupComplete]);
 
   useEffect(() => {
-    const snapshot: DesktopSnapshot = { setupComplete, windows, activeWallpaperId, notes, activeNoteId, virtualFileSystem, fileContents, trashItems, finderPath, systemAppearance, volume, currentTrack, browserTabs, activeBrowserTabId, browserTabGroups, bookmarks, browserHistoryEntries, browserDownloads, editorPath, editorDraft, calendarEntries, reminders, weatherUnit };
+    const snapshot: DesktopSnapshot = { setupComplete, windows, activeWallpaperId, customWallpapers, notes, activeNoteId, virtualFileSystem, fileContents, trashItems, finderPath, systemAppearance, volume, currentTrack, browserTabs, activeBrowserTabId, browserTabGroups, bookmarks, browserHistoryEntries, browserDownloads, editorPath, editorDraft, calendarEntries, reminders, weatherUnit };
     try { window.localStorage.setItem(DESKTOP_STATE_KEY, JSON.stringify(snapshot)); } catch { /* storage may be unavailable */ }
-  }, [setupComplete, windows, activeWallpaperId, notes, activeNoteId, virtualFileSystem, fileContents, trashItems, finderPath, systemAppearance, volume, currentTrack, browserTabs, activeBrowserTabId, browserTabGroups, bookmarks, browserHistoryEntries, browserDownloads, editorPath, editorDraft, calendarEntries, reminders, weatherUnit]);
+  }, [setupComplete, windows, activeWallpaperId, customWallpapers, notes, activeNoteId, virtualFileSystem, fileContents, trashItems, finderPath, systemAppearance, volume, currentTrack, browserTabs, activeBrowserTabId, browserTabGroups, bookmarks, browserHistoryEntries, browserDownloads, editorPath, editorDraft, calendarEntries, reminders, weatherUnit]);
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume / 100;
@@ -853,6 +874,11 @@ export default function Home() {
   useEffect(() => {
     if (!activeBrowserTab || activeBrowserTab.mode !== "web" || activeBrowserTab.loading || activeBrowserTab.url === "about:blank") return;
     recordBrowserHistory(activeBrowserTab.title, activeBrowserTab.url, "web");
+  }, [activeBrowserTab?.id, activeBrowserTab?.loading, activeBrowserTab?.mode, activeBrowserTab?.title, activeBrowserTab?.url]);
+
+  useEffect(() => {
+    if (!activeBrowserTab || activeBrowserTab.mode !== "video" || activeBrowserTab.loading) return;
+    recordBrowserHistory(activeBrowserTab.title, activeBrowserTab.url, "video");
   }, [activeBrowserTab?.id, activeBrowserTab?.loading, activeBrowserTab?.mode, activeBrowserTab?.title, activeBrowserTab?.url]);
 
   useEffect(() => {
@@ -1009,9 +1035,12 @@ export default function Home() {
   const navigateBrowser = (value: string) => {
     if (looksLikeSearch(value)) { void fetchBrowserSearch(value); return; }
     const nextUrl = normalizeUrl(value);
+    const videoSource = resolveBrowserVideo(nextUrl);
     updateActiveBrowserTab((tab) => {
-      return appendBrowserRoute(tab, { url: nextUrl, address: nextUrl, title: labelFromUrl(nextUrl), mode: "web" });
+      const route: BrowserRoute = { url: nextUrl, address: nextUrl, title: videoSource?.title ?? labelFromUrl(nextUrl), mode: videoSource ? "video" : "web" };
+      return { ...appendBrowserRoute(tab, route), videoSource: videoSource ?? undefined };
     });
+    setVideoError(null);
   };
 
   const openReaderMode = () => {
@@ -1071,6 +1100,7 @@ export default function Home() {
 
   const refreshBrowser = () => {
     if (activeBrowserTab?.mode === "media") return;
+    if (activeBrowserTab?.mode === "video") { updateActiveBrowserTab((tab) => ({ ...tab, loading: true, reloadNonce: tab.reloadNonce + 1 })); return; }
     if (activeBrowserTab?.mode === "search") { void fetchBrowserSearch(activeBrowserTab.searchQuery ?? activeBrowserTab.address); return; }
     updateActiveBrowserTab((tab) => ({ ...tab, loading: true, reloadNonce: tab.reloadNonce + 1 }));
   };
@@ -1377,9 +1407,9 @@ export default function Home() {
                     })}
                   </div>
                   <div className="finder-footer"><span>{finderSearch.trim() ? `${finderSearchResults.length} 个匹配结果` : `${finderEntries.length} 个项目`}</span><span>文本双击编辑 · 右键可管理 · 拖放删除</span></div>
-                  {previewFilePath && <div className="finder-preview" role="dialog" aria-label="文件预览"><header><div><FileText size={16} /><span>{virtualName(previewFilePath)}</span></div><div>{isTextFile(previewFilePath) && <button className="finder-preview-edit" onClick={() => openTextEditor(previewFilePath)}><FilePenLine size={13} /> 编辑</button>}<button aria-label="关闭文件预览" onClick={() => setPreviewFilePath(null)}><X size={15} /></button></div></header>{isImageFile(previewFilePath) ? <img src={previewFileImage(previewFilePath)} alt={virtualName(previewFilePath)} /> : <pre>{previewFileText(previewFilePath)}</pre>}</div>}
+                  {previewFilePath && <div className="finder-preview" role="dialog" aria-label="文件预览"><header><div><FileText size={16} /><span>{virtualName(previewFilePath)}</span></div><div>{isTextFile(previewFilePath) && <button className="finder-preview-edit" onClick={() => openTextEditor(previewFilePath)}><FilePenLine size={13} /> 编辑</button>}{isImageFile(previewFilePath) && <button className="finder-preview-edit" onClick={() => setFileAsWallpaper(previewFilePath)}><Palette size={13} /> 设为壁纸</button>}<button aria-label="关闭文件预览" onClick={() => setPreviewFilePath(null)}><X size={15} /></button></div></header>{isImageFile(previewFilePath) ? <img src={previewFileImage(previewFilePath)} alt={virtualName(previewFilePath)} /> : <pre>{previewFileText(previewFilePath)}</pre>}</div>}
                   {fileInfoPath && <div className="finder-file-info" role="dialog" aria-label="文件属性"><header><strong>文件属性</strong><button aria-label="关闭文件属性" onClick={() => setFileInfoPath(null)}><X size={14} /></button></header><dl><div><dt>名称</dt><dd>{virtualName(fileInfoPath)}</dd></div><div><dt>位置</dt><dd>{displayVirtualPath(virtualParent(fileInfoPath))}</dd></div><div><dt>类型</dt><dd>{isTextFile(fileInfoPath) ? "文本文件" : isImageFile(fileInfoPath) ? "图片" : "文件"}</dd></div><div><dt>大小</dt><dd>{fileContents[fileInfoPath] ? `${fileContents[fileInfoPath].length} 个字符` : "—"}</dd></div></dl></div>}
-                  {finderContextMenu && <aside className="finder-context-menu" role="menu" style={{ left: finderContextMenu.x, top: finderContextMenu.y }}><button role="menuitem" disabled={!isTextFile(finderContextMenu.path)} onClick={() => openTextEditor(finderContextMenu.path)}><FilePenLine size={14} />编辑</button><button role="menuitem" onClick={() => { startRenameFile(finderContextMenu.path); setFinderContextMenu(null); }}><Pencil size={14} />重命名</button><button role="menuitem" onClick={() => { setFileInfoPath(finderContextMenu.path); setFinderContextMenu(null); }}><CircleHelp size={14} />查看属性</button><button role="menuitem" className="danger" onClick={() => { moveFileToTrash(finderContextMenu.path); setFinderContextMenu(null); }}><Trash2 size={14} />移到回收站</button></aside>}
+                  {finderContextMenu && <aside className="finder-context-menu" role="menu" style={{ left: finderContextMenu.x, top: finderContextMenu.y }}><button role="menuitem" disabled={!isTextFile(finderContextMenu.path)} onClick={() => openTextEditor(finderContextMenu.path)}><FilePenLine size={14} />编辑</button><button role="menuitem" disabled={!isImageFile(finderContextMenu.path)} onClick={() => { setFileAsWallpaper(finderContextMenu.path); setFinderContextMenu(null); }}><Palette size={14} />设为壁纸</button><button role="menuitem" onClick={() => { startRenameFile(finderContextMenu.path); setFinderContextMenu(null); }}><Pencil size={14} />重命名</button><button role="menuitem" onClick={() => { setFileInfoPath(finderContextMenu.path); setFinderContextMenu(null); }}><CircleHelp size={14} />查看属性</button><button role="menuitem" className="danger" onClick={() => { moveFileToTrash(finderContextMenu.path); setFinderContextMenu(null); }}><Trash2 size={14} />移到回收站</button></aside>}
                 </div>
               </div>
             </WindowChrome>
@@ -1422,7 +1452,7 @@ export default function Home() {
 
           {windowItem.id === "photos" && (
             <WindowChrome title="灵感相册" appWindow={windowItem} onClose={() => closeApp("photos")} onMinimize={() => minimizeApp("photos")} onFocus={() => bringToFront("photos")} onMaximize={() => toggleMaximize("photos")} onBoundsChange={(bounds) => updateWindowBounds("photos", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("photos", side)} className="photos-window">
-              <div className="photos-body">{selectedPhoto ? <div className="photo-viewer"><div className="photo-viewer-top"><button className="photo-back" onClick={() => setSelectedPhotoId(null)}><ChevronLeft size={16} /> 图库</button><span>{Math.max(1, photoItems.findIndex((photo) => photo.id === selectedPhoto.id) + 1)} / {photoItems.length}</span><div><button aria-label="上一张图片" onClick={() => movePhoto(-1)}><ChevronLeft size={16} /></button><button aria-label="下一张图片" onClick={() => movePhoto(1)}><ChevronRight size={16} /></button></div></div><div className="photo-stage"><button className="photo-stage-control left" aria-label="上一张图片" onClick={() => movePhoto(-1)}><ChevronLeft size={22} /></button><img src={selectedPhoto.src} alt={selectedPhoto.alt} /><button className="photo-stage-control right" aria-label="下一张图片" onClick={() => movePhoto(1)}><ChevronRight size={22} /></button></div><div className="photo-viewer-meta"><div><span className="eyebrow">已打开 · 可用左右箭头切换</span><h2>{selectedPhoto.title}</h2><p>{selectedPhoto.subtitle} · 可在“桌面与外观”中设为壁纸。</p></div><button className="photo-set-wallpaper" onClick={() => { const wallpaper = wallpapers.find((item) => item.src === selectedPhoto.src); if (wallpaper) setActiveWallpaperId(wallpaper.id); }}>设为壁纸</button></div></div> : <><header><div><span className="eyebrow">灵感相册</span><h2>{photoViewMode === "library" ? "我的图库。" : "光线留下的痕迹。"}</h2></div><div className="photos-view-actions"><button className={photoViewMode === "highlights" ? "active" : ""} onClick={() => setPhotoViewMode("highlights")}><Sparkles size={15} /> 精选</button><button className={photoViewMode === "library" ? "active" : ""} onClick={() => setPhotoViewMode("library")}><LayoutGrid size={15} /> 图库</button></div></header>{photoViewMode === "library" ? <div className="photo-library-grid">{photoItems.map((photo) => <button key={photo.id} className="photo-library-item" onClick={() => setSelectedPhotoId(photo.id)}><img src={photo.src} alt={photo.alt} /><span><b>{photo.title}</b><small>{photo.subtitle}</small></span></button>)}</div> : <><div className="photo-mosaic">{photoItems.slice(0, 4).map((photo) => <button key={photo.id} className="photo-tile" onClick={() => setSelectedPhotoId(photo.id)}><img src={photo.src} alt={photo.alt} /><span>{photo.title}</span></button>)}<button className="mosaic-caption" onClick={() => { setPhotoViewMode("library"); setSelectedPhotoId("alpine"); }}><Sparkles size={17} /><span>最近添加<br /><b>2 张壁纸</b></span></button></div><p>点开任意照片可查看大图；打开后可点击控制按钮或使用键盘左右箭头切换。</p></>}</>}</div>
+              <div className="photos-body">{selectedPhoto ? <div className="photo-viewer"><div className="photo-viewer-top"><button className="photo-back" onClick={() => setSelectedPhotoId(null)}><ChevronLeft size={16} /> 图库</button><span>{Math.max(1, photoItems.findIndex((photo) => photo.id === selectedPhoto.id) + 1)} / {photoItems.length}</span><div><button aria-label="上一张图片" onClick={() => movePhoto(-1)}><ChevronLeft size={16} /></button><button aria-label="下一张图片" onClick={() => movePhoto(1)}><ChevronRight size={16} /></button></div></div><div className="photo-stage"><button className="photo-stage-control left" aria-label="上一张图片" onClick={() => movePhoto(-1)}><ChevronLeft size={22} /></button><img src={selectedPhoto.src} alt={selectedPhoto.alt} /><button className="photo-stage-control right" aria-label="下一张图片" onClick={() => movePhoto(1)}><ChevronRight size={22} /></button></div><div className="photo-viewer-meta"><div><span className="eyebrow">已打开 · 可用左右箭头切换</span><h2>{selectedPhoto.title}</h2><p>{selectedPhoto.subtitle} · 可在“桌面与外观”中设为壁纸。</p></div><button className="photo-set-wallpaper" onClick={() => setWallpaperFromSource(selectedPhoto.src, selectedPhoto.title)}>设为壁纸</button></div></div> : <><header><div><span className="eyebrow">灵感相册</span><h2>{photoViewMode === "library" ? "我的图库。" : "光线留下的痕迹。"}</h2></div><div className="photos-view-actions"><button className={photoViewMode === "highlights" ? "active" : ""} onClick={() => setPhotoViewMode("highlights")}><Sparkles size={15} /> 精选</button><button className={photoViewMode === "library" ? "active" : ""} onClick={() => setPhotoViewMode("library")}><LayoutGrid size={15} /> 图库</button></div></header>{photoViewMode === "library" ? <div className="photo-library-grid">{photoItems.map((photo) => <button key={photo.id} className="photo-library-item" onClick={() => setSelectedPhotoId(photo.id)}><img src={photo.src} alt={photo.alt} /><span><b>{photo.title}</b><small>{photo.subtitle}</small></span></button>)}</div> : <><div className="photo-mosaic">{photoItems.slice(0, 4).map((photo) => <button key={photo.id} className="photo-tile" onClick={() => setSelectedPhotoId(photo.id)}><img src={photo.src} alt={photo.alt} /><span>{photo.title}</span></button>)}<button className="mosaic-caption" onClick={() => { setPhotoViewMode("library"); setSelectedPhotoId("alpine"); }}><Sparkles size={17} /><span>最近添加<br /><b>2 张壁纸</b></span></button></div><p>点开任意照片可查看大图；打开后可点击控制按钮或使用键盘左右箭头切换。</p></>}</>}</div>
             </WindowChrome>
           )}
 
@@ -1461,6 +1491,10 @@ export default function Home() {
                   {activeBrowserTab.mode === "media" ? (
                     <section className="browser-media-page">
                       <header><div><span className="eyebrow">当前标签 · 图片查看</span><h2>{activeBrowserTab.title}</h2><p>{activeBrowserTab.mediaItems?.length ? `${(activeBrowserTab.mediaIndex ?? 0) + 1} / ${activeBrowserTab.mediaItems.length} · 图片留在当前标签中查看` : "公开图片资源"}</p></div><div className="media-actions"><button onClick={returnToReader}><ArrowLeft size={14} /> 返回文章</button><button onClick={downloadCurrentImage}><Download size={14} /> 下载到 Finder</button><button onClick={() => setMediaZoom((value) => Math.max(60, value - 20))} aria-label="缩小图片"><ZoomOut size={15} /></button><span>{mediaZoom}%</span><button onClick={() => setMediaZoom((value) => Math.min(220, value + 20))} aria-label="放大图片"><ZoomIn size={15} /></button></div></header><div className="browser-media-stage"><button aria-label="上一张图片" disabled={(activeBrowserTab.mediaItems?.length ?? 0) < 2} onClick={() => stepReaderImage(-1)}><ChevronLeft size={22} /></button><figure>{mediaImageError ? <div className="browser-media-error"><CircleHelp size={24} /><strong>图片暂时无法加载</strong><span>{mediaImageError}</span><button onClick={() => setMediaImageError(null)}>重试</button></div> : <img src={activeBrowserTab.url} alt={activeBrowserTab.title} style={{ transform: `scale(${mediaZoom / 100})` }} onError={() => setMediaImageError("该图片来源拒绝了嵌入或暂时不可用。可返回文章继续阅读其他内容。")} />}<figcaption>{activeBrowserTab.title}</figcaption></figure><button aria-label="下一张图片" disabled={(activeBrowserTab.mediaItems?.length ?? 0) < 2} onClick={() => stepReaderImage(1)}><ChevronRight size={22} /></button></div><div className="browser-media-strip">{activeBrowserTab.mediaItems?.map((item, index) => <button key={item.src} className={index === activeBrowserTab.mediaIndex ? "active" : ""} onClick={() => { updateActiveBrowserTab((tab) => ({ ...tab, mediaIndex: index, title: item.alt || "网页图片", address: item.src, url: item.src })); setMediaImageError(null); }}><img src={item.src} alt={item.alt} /></button>)}</div></section>
+                  ) : activeBrowserTab.mode === "video" ? (
+                    <section className="browser-video-page">
+                      <header><div><span className="eyebrow">当前标签 · 视频播放</span><h2>{activeBrowserTab.title}</h2><p>{activeBrowserTab.videoSource?.provider ?? "视频"} · 正在尝试在浏览器内播放。</p></div><div className="media-actions"><button onClick={() => stepBrowserHistory(-1)} disabled={activeBrowserTab.historyIndex === 0}><ArrowLeft size={14} /> 返回上一页</button><button onClick={() => openInReader(activeBrowserTab.url, `阅读：${activeBrowserTab.title}`)}><FileText size={14} /> 兼容阅读</button><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", title: labelFromUrl(tab.url), loading: true }))}><Globe2 size={14} /> 网页模式</button></div></header><div className="browser-video-stage">{videoError ? <div className="browser-video-error"><CircleHelp size={26} /><strong>该视频暂时无法在内置播放器中打开</strong><span>{videoError}</span><button onClick={() => openInReader(activeBrowserTab.url, `阅读：${activeBrowserTab.title}`)}>进入兼容阅读</button><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", loading: true }))}>尝试网页模式</button></div> : activeBrowserTab.videoSource?.kind === "direct" ? <video key={`${activeBrowserTab.url}-${activeBrowserTab.reloadNonce}`} controls autoPlay playsInline src={activeBrowserTab.videoSource.src} onLoadedData={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} onError={() => { setVideoError("该视频资源拒绝播放、需要登录，或暂时不可用。你仍可尝试网页模式或兼容阅读。"); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} /> : <iframe key={`${activeBrowserTab.url}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 视频播放器" src={activeBrowserTab.videoSource?.src} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} onError={() => { setVideoError("视频网站拒绝嵌入或需要登录。可切换网页模式，或者在兼容阅读中查看页面信息。"); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} />}</div><footer><Play size={14} /><span>公开视频与允许嵌入的 YouTube、Bilibili、Vimeo 链接会在当前标签播放；其他网站的 DRM、登录或嵌入限制由网站自身控制。</span></footer>
+                    </section>
                   ) : activeBrowserTab.mode === "reader" ? (
                     <section className="browser-reader-page">
                       <header>

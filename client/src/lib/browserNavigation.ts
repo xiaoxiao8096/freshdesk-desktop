@@ -1,4 +1,4 @@
-export type NavigationMode = "web" | "search" | "reader";
+export type NavigationMode = "web" | "search" | "reader" | "video";
 
 export type NavigationRoute = {
   url: string;
