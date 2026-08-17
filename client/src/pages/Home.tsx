@@ -3,6 +3,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
+import { searchVirtualFiles } from "@/lib/finderSearch";
 import {
   Archive,
   ArrowLeft,
@@ -22,6 +23,7 @@ import {
   Download,
   Droplets,
   FilePlus2,
+  FilePenLine,
   FileText,
   Folder,
   FolderOpen,
@@ -61,7 +63,7 @@ import {
   X,
 } from "lucide-react";
 
-type AppName = "finder" | "music" | "notes" | "photos" | "settings" | "terminal" | "browser" | "weather" | "calendar" | "reminders" | "trash";
+type AppName = "finder" | "music" | "notes" | "photos" | "settings" | "terminal" | "browser" | "weather" | "calendar" | "reminders" | "trash" | "editor";
 
 type WindowBounds = {
   x: number;
@@ -195,6 +197,34 @@ type AppWindow = {
   restoreBounds?: WindowBounds;
 };
 
+type DesktopSnapshot = Partial<{
+  setupComplete: boolean;
+  windows: AppWindow[];
+  activeWallpaperId: string;
+  notes: NoteDocument[];
+  activeNoteId: string;
+  virtualFileSystem: VirtualFileSystem;
+  fileContents: Record<string, string>;
+  trashItems: VirtualTrashItem[];
+  finderPath: string;
+  systemAppearance: "light" | "dark";
+  volume: number;
+  currentTrack: number;
+  browserTabs: BrowserTab[];
+  activeBrowserTabId: string;
+  browserTabGroups: BrowserTabGroup[];
+  bookmarks: BrowserBookmark[];
+  browserHistoryEntries: BrowserHistoryEntry[];
+  browserDownloads: BrowserDownload[];
+  editorPath: string | null;
+  editorDraft: string;
+  calendarEntries: CalendarEntry[];
+  reminders: ReminderItem[];
+  weatherUnit: "c" | "f";
+}>;
+
+type FinderContextMenu = { path: string; x: number; y: number };
+
 const WALLPAPER = "/manus-storage/freshdesk-aurora-wallpaper_a64c0088.jpg";
 const ALBUM_ORBIT = "/manus-storage/freshdesk-album-orbit_68ca7295.jpg";
 const ALBUM_TIDE = "/manus-storage/freshdesk-album-tide_658b722a.jpg";
@@ -220,10 +250,27 @@ const photoItems: PhotoItem[] = [
 ];
 
 const VIRTUAL_HOME = "/Users/freshdesk";
+const DESKTOP_STATE_KEY = "freshdesk.desktop-state.v2";
 const initialVirtualFileSystem: VirtualFileSystem = {
   directories: [VIRTUAL_HOME, `${VIRTUAL_HOME}/Desktop`, `${VIRTUAL_HOME}/Documents`, `${VIRTUAL_HOME}/Documents/Projects`, `${VIRTUAL_HOME}/Downloads`, `${VIRTUAL_HOME}/Music`, `${VIRTUAL_HOME}/Pictures`],
   files: [`${VIRTUAL_HOME}/README.md`, `${VIRTUAL_HOME}/Desktop/开机笔记.txt`, `${VIRTUAL_HOME}/Documents/工作流.md`, `${VIRTUAL_HOME}/Pictures/晨雾极光.jpg`],
 };
+const initialFileContents: Record<string, string> = {
+  [`${VIRTUAL_HOME}/README.md`]: "# Freshdesk Drive\n\n这是桌面中的虚拟文件系统。双击文本文件即可在文本编辑器中打开。\n\n- 可编辑并保存\n- 可重命名\n- 可拖到回收站\n- 可从回收站恢复",
+  [`${VIRTUAL_HOME}/Desktop/开机笔记.txt`]: "今天的桌面已经准备好。\n\n打开一个应用，或者写下一条新的想法。",
+  [`${VIRTUAL_HOME}/Documents/工作流.md`]: "# 工作流\n\n1. 整理今天的任务\n2. 保存网页阅读内容\n3. 在傍晚前回顾便笺",
+};
+
+function loadDesktopSnapshot(): DesktopSnapshot | null {
+  try {
+    const raw = window.localStorage.getItem(DESKTOP_STATE_KEY);
+    if (!raw) return null;
+    const snapshot = JSON.parse(raw) as DesktopSnapshot;
+    return snapshot && typeof snapshot === "object" ? snapshot : null;
+  } catch {
+    return null;
+  }
+}
 
 const weatherLocations: WeatherLocation[] = [
   { id: "shanghai", city: "上海", temp: 26, condition: "局部多云", high: 29, low: 23, humidity: 74, wind: "东南风 12 km/h", forecast: [{ label: "现在", icon: "partly", temp: 26 }, { label: "12 时", icon: "sun", temp: 28 }, { label: "15 时", icon: "partly", temp: 29 }, { label: "18 时", icon: "cloud", temp: 27 }] },
@@ -276,6 +323,7 @@ const appMeta: Record<AppName, { label: string; color: string; icon: typeof Fold
   calendar: { label: "日历", color: "#f35f67", icon: CalendarDays },
   reminders: { label: "提醒", color: "#ff9d4e", icon: ListTodo },
   trash: { label: "回收站", color: "#4b5361", icon: Trash2 },
+  editor: { label: "文本编辑", color: "#7d8da6", icon: FilePenLine },
 };
 
 const defaultWindowBounds: Record<AppName, WindowBounds> = {
@@ -290,6 +338,7 @@ const defaultWindowBounds: Record<AppName, WindowBounds> = {
   calendar: { x: 330, y: 74, width: 680, height: 505 },
   reminders: { x: 420, y: 92, width: 570, height: 455 },
   trash: { x: 430, y: 112, width: 540, height: 420 },
+  editor: { x: 380, y: 82, width: 680, height: 520 },
 };
 
 function formatDuration(value: number) {
@@ -468,29 +517,31 @@ function WindowChrome({
 }
 
 export default function Home() {
+  const [restoredDesktopState] = useState<DesktopSnapshot | null>(() => loadDesktopSnapshot());
   const [setupComplete, setSetupComplete] = useState(() => {
+    if (typeof restoredDesktopState?.setupComplete === "boolean") return restoredDesktopState.setupComplete;
     try { return window.localStorage.getItem("freshdesk.setup-complete") === "true"; } catch { return false; }
   });
   const [showSetupChoice, setShowSetupChoice] = useState(false);
-  const [windows, setWindows] = useState<AppWindow[]>([]);
+  const [windows, setWindows] = useState<AppWindow[]>(() => restoredDesktopState?.windows ?? []);
   const [activePanel, setActivePanel] = useState<"control" | "spotlight" | "calendar" | "about" | null>(null);
   const [selectedDesktop, setSelectedDesktop] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
   const [wifi, setWifi] = useState(true);
   const [bluetooth, setBluetooth] = useState(true);
   const [focus, setFocus] = useState(false);
-  const [volume, setVolume] = useState(62);
+  const [volume, setVolume] = useState(() => restoredDesktopState?.volume ?? 62);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTrack, setCurrentTrack] = useState(0);
+  const [currentTrack, setCurrentTrack] = useState(() => restoredDesktopState?.currentTrack ?? 0);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(150);
-  const [activeWallpaperId, setActiveWallpaperId] = useState("aurora");
-  const [notes, setNotes] = useState<NoteDocument[]>([
+  const [activeWallpaperId, setActiveWallpaperId] = useState(() => restoredDesktopState?.activeWallpaperId ?? "aurora");
+  const [notes, setNotes] = useState<NoteDocument[]>(() => restoredDesktopState?.notes ?? [
     { id: "welcome-note", title: "新桌面的第一天", body: "今天先从一段安静的音乐开始。\n\n桌面已经准备好了。打开任意一个应用，看看这个空间会带你去哪里。", updated: "今天" },
     { id: "try-list", title: "要尝试的事", body: "- 换一张桌面壁纸\n- 新建一张便笺\n- 把喜欢的网页放进工作组", updated: "昨天" },
     { id: "future", title: "给未来的提醒", body: "留一点空白，给那些还没发生的好事。", updated: "8 月 14 日" },
   ]);
-  const [activeNoteId, setActiveNoteId] = useState("welcome-note");
+  const [activeNoteId, setActiveNoteId] = useState(() => restoredDesktopState?.activeNoteId ?? "welcome-note");
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
   const [photoViewMode, setPhotoViewMode] = useState<"highlights" | "library">("highlights");
   const [terminalLines, setTerminalLines] = useState<string[]>([
@@ -499,44 +550,51 @@ export default function Home() {
   ]);
   const [terminalInput, setTerminalInput] = useState("");
   const [terminalCwd, setTerminalCwd] = useState(VIRTUAL_HOME);
-  const [virtualFileSystem, setVirtualFileSystem] = useState<VirtualFileSystem>(initialVirtualFileSystem);
-  const [finderPath, setFinderPath] = useState(VIRTUAL_HOME);
-  const [trashItems, setTrashItems] = useState<VirtualTrashItem[]>([]);
+  const [virtualFileSystem, setVirtualFileSystem] = useState<VirtualFileSystem>(() => restoredDesktopState?.virtualFileSystem ?? initialVirtualFileSystem);
+  const [fileContents, setFileContents] = useState<Record<string, string>>(() => ({ ...initialFileContents, ...(restoredDesktopState?.fileContents ?? {}) }));
+  const [finderPath, setFinderPath] = useState(() => restoredDesktopState?.finderPath ?? VIRTUAL_HOME);
+  const [trashItems, setTrashItems] = useState<VirtualTrashItem[]>(() => restoredDesktopState?.trashItems ?? []);
   const [draggedFilePath, setDraggedFilePath] = useState<string | null>(null);
-  const [systemAppearance, setSystemAppearance] = useState<"light" | "dark">("dark");
+  const [systemAppearance, setSystemAppearance] = useState<"light" | "dark">(() => restoredDesktopState?.systemAppearance ?? "dark");
   const [snapPreview, setSnapPreview] = useState<SnapTarget | null>(null);
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
-  const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>([
+  const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>(() => restoredDesktopState?.browserTabs?.length ? restoredDesktopState.browserTabs.map((tab) => ({ ...tab, loading: false })) : [
     { id: "welcome", title: "新标签页", address: "", url: "about:blank", history: ["about:blank"], historyIndex: 0, loading: false, reloadNonce: 0, pinned: true, mode: "search" },
   ]);
-  const [activeBrowserTabId, setActiveBrowserTabId] = useState("welcome");
-  const [browserTabGroups, setBrowserTabGroups] = useState<BrowserTabGroup[]>([]);
+  const [activeBrowserTabId, setActiveBrowserTabId] = useState(() => restoredDesktopState?.activeBrowserTabId ?? "welcome");
+  const [browserTabGroups, setBrowserTabGroups] = useState<BrowserTabGroup[]>(() => restoredDesktopState?.browserTabGroups ?? []);
   const [groupsOpen, setGroupsOpen] = useState(false);
-  const [bookmarks, setBookmarks] = useState<BrowserBookmark[]>([
+  const [bookmarks, setBookmarks] = useState<BrowserBookmark[]>(() => restoredDesktopState?.bookmarks ?? [
     { id: "freshdesk", title: "Freshdesk Desktop", url: "https://example.com" },
     { id: "web-platform", title: "Web 平台文档", url: "https://developer.mozilla.org" },
   ]);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
-  const [browserHistoryEntries, setBrowserHistoryEntries] = useState<BrowserHistoryEntry[]>([]);
-  const [browserDownloads, setBrowserDownloads] = useState<BrowserDownload[]>([]);
+  const [browserHistoryEntries, setBrowserHistoryEntries] = useState<BrowserHistoryEntry[]>(() => restoredDesktopState?.browserHistoryEntries ?? []);
+  const [browserDownloads, setBrowserDownloads] = useState<BrowserDownload[]>(() => restoredDesktopState?.browserDownloads ?? []);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [previewFilePath, setPreviewFilePath] = useState<string | null>(null);
+  const [editorPath, setEditorPath] = useState<string | null>(() => restoredDesktopState?.editorPath ?? null);
+  const [editorDraft, setEditorDraft] = useState(() => restoredDesktopState?.editorDraft ?? "");
+  const [finderSearch, setFinderSearch] = useState("");
+  const [finderSearchScope, setFinderSearchScope] = useState<"current" | "downloads" | "pictures">("current");
+  const [finderContextMenu, setFinderContextMenu] = useState<FinderContextMenu | null>(null);
+  const [fileInfoPath, setFileInfoPath] = useState<string | null>(null);
   const [weatherLocationId, setWeatherLocationId] = useState("shanghai");
-  const [weatherUnit, setWeatherUnit] = useState<"c" | "f">("c");
+  const [weatherUnit, setWeatherUnit] = useState<"c" | "f">(() => restoredDesktopState?.weatherUnit ?? "c");
   const [weatherUpdatedAt, setWeatherUpdatedAt] = useState(() => new Date());
   const [liveWeather, setLiveWeather] = useState<LiveWeather | null>(null);
   const [weatherSearch, setWeatherSearch] = useState("");
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [weatherError, setWeatherError] = useState("");
-  const [calendarEntries, setCalendarEntries] = useState<CalendarEntry[]>([
+  const [calendarEntries, setCalendarEntries] = useState<CalendarEntry[]>(() => restoredDesktopState?.calendarEntries ?? [
     { id: "morning", title: "晨间梳理", time: "09:00", color: "#6fa8ff" },
     { id: "review", title: "界面回顾", time: "15:00", color: "#ee7b91" },
   ]);
   const [calendarDraft, setCalendarDraft] = useState("");
-  const [reminders, setReminders] = useState<ReminderItem[]>([
+  const [reminders, setReminders] = useState<ReminderItem[]>(() => restoredDesktopState?.reminders ?? [
     { id: "wallpaper", title: "选一张今天喜欢的壁纸", done: true },
     { id: "note", title: "在便笺里记录一个想法", done: false },
     { id: "music", title: "试听一首新的环境音乐", done: false },
@@ -562,6 +620,12 @@ export default function Home() {
   const currentWeather = liveWeather ?? weatherLocations.find((location) => location.id === weatherLocationId) ?? weatherLocations[0];
   const completedReminders = reminders.filter((item) => item.done).length;
   const finderEntries = virtualDirectoryEntries(virtualFileSystem, finderPath);
+  const finderSearchResults = useMemo(() => {
+    const query = finderSearch.trim().toLocaleLowerCase();
+    if (!query) return [];
+    return searchVirtualFiles({ files: virtualFileSystem.files, home: VIRTUAL_HOME, currentPath: finderPath, scope: finderSearchScope, query }).map((path) => ({ name: virtualName(path), type: "file" as const, path }));
+  }, [finderPath, finderSearch, finderSearchScope, virtualFileSystem.files]);
+  const visibleFinderEntries = finderSearch.trim() ? finderSearchResults : finderEntries;
   const readerInput = useMemo(() => ({ url: /^https?:\/\//i.test(activeBrowserTab?.url ?? "") ? activeBrowserTab.url : "https://example.com" }), [activeBrowserTab?.url]);
   const readerQuery = trpc.browser.readPage.useQuery(readerInput, { enabled: activeBrowserTab?.mode === "reader" });
   const browserUtils = trpc.useUtils();
@@ -592,6 +656,7 @@ export default function Home() {
 
   const previewableFile = (path: string) => /\.(?:txt|md|jpg|jpeg|png)$/i.test(path);
   const previewFileText = (path: string) => {
+    if (fileContents[path] !== undefined) return fileContents[path];
     const name = virtualName(path);
     if (name === "README.md") return "# Freshdesk Drive\n\n这是桌面中的虚拟文件系统。双击文本文件即可在窗口中预览。\n\n- 可重命名\n- 可拖到回收站\n- 可从回收站恢复";
     if (name === "开机笔记.txt") return "今天的桌面已经准备好。\n\n打开一个应用，或者写下一条新的想法。";
@@ -607,6 +672,7 @@ export default function Home() {
     setFinderPath(path);
     setPreviewFilePath(null);
     setRenamingPath(null);
+    setFinderContextMenu(null);
   };
   const startRenameFile = (path: string) => { setRenamingPath(path); setRenameValue(virtualName(path)); };
   const commitRenameFile = () => {
@@ -615,8 +681,42 @@ export default function Home() {
     if (!nextName || nextName.includes("/")) { setRenamingPath(null); return; }
     const nextPath = `${virtualParent(renamingPath)}/${nextName}`;
     setVirtualFileSystem((fileSystem) => fileSystem.files.includes(nextPath) ? fileSystem : { ...fileSystem, files: fileSystem.files.map((path) => path === renamingPath ? nextPath : path) });
+    setFileContents((contents) => {
+      if (contents[renamingPath] === undefined) return contents;
+      const nextContents = { ...contents, [nextPath]: contents[renamingPath] };
+      delete nextContents[renamingPath];
+      return nextContents;
+    });
     setPreviewFilePath((path) => path === renamingPath ? nextPath : path);
+    setEditorPath((path) => path === renamingPath ? nextPath : path);
     setRenamingPath(null);
+  };
+  const isTextFile = (path: string) => /\.(?:txt|md)$/i.test(path);
+  const openTextEditor = (path: string) => {
+    if (!isTextFile(path)) return;
+    setEditorPath(path);
+    setEditorDraft(previewFileText(path));
+    setPreviewFilePath(null);
+    setFinderContextMenu(null);
+    openApp("editor");
+  };
+  const saveEditorDocument = () => {
+    if (!editorPath) return;
+    setFileContents((contents) => ({ ...contents, [editorPath]: editorDraft }));
+  };
+  const createTextDocument = () => {
+    const suffix = virtualFileSystem.files.some((path) => path === `${VIRTUAL_HOME}/Documents/未命名文稿.txt`) ? `-${Date.now().toString().slice(-4)}` : "";
+    const path = `${VIRTUAL_HOME}/Documents/未命名文稿${suffix}.txt`;
+    setVirtualFileSystem((fileSystem) => ({ ...fileSystem, files: [...fileSystem.files, path] }));
+    setFileContents((contents) => ({ ...contents, [path]: "从这里开始输入。" }));
+    setEditorPath(path);
+    setEditorDraft("从这里开始输入。");
+    openApp("editor");
+  };
+  const openFinderContextMenu = (event: React.MouseEvent, path: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setFinderContextMenu({ path, x: event.clientX, y: event.clientY });
   };
 
   const fetchLiveWeather = async (rawCity = weatherSearch) => {
@@ -667,6 +767,11 @@ export default function Home() {
   useEffect(() => {
     try { window.localStorage.setItem("freshdesk.setup-complete", String(setupComplete)); } catch { /* local storage may be disabled */ }
   }, [setupComplete]);
+
+  useEffect(() => {
+    const snapshot: DesktopSnapshot = { setupComplete, windows, activeWallpaperId, notes, activeNoteId, virtualFileSystem, fileContents, trashItems, finderPath, systemAppearance, volume, currentTrack, browserTabs, activeBrowserTabId, browserTabGroups, bookmarks, browserHistoryEntries, browserDownloads, editorPath, editorDraft, calendarEntries, reminders, weatherUnit };
+    try { window.localStorage.setItem(DESKTOP_STATE_KEY, JSON.stringify(snapshot)); } catch { /* storage may be unavailable */ }
+  }, [setupComplete, windows, activeWallpaperId, notes, activeNoteId, virtualFileSystem, fileContents, trashItems, finderPath, systemAppearance, volume, currentTrack, browserTabs, activeBrowserTabId, browserTabGroups, bookmarks, browserHistoryEntries, browserDownloads, editorPath, editorDraft, calendarEntries, reminders, weatherUnit]);
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume / 100;
@@ -815,6 +920,7 @@ export default function Home() {
     const filePath = `${VIRTUAL_HOME}/Downloads/${safeTitle}.txt`;
     setBrowserDownloads((items) => [{ id: `download-${Date.now()}`, title: `${safeTitle}.txt`, url: activeBrowserTab.url, createdAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }), status: "已保存" }, ...items]);
     setVirtualFileSystem((fileSystem) => fileSystem.files.includes(filePath) ? fileSystem : { ...fileSystem, files: [...fileSystem.files, filePath] });
+    setFileContents((contents) => ({ ...contents, [filePath]: `# ${safeTitle}\n\n${readerQuery.data?.summary || "这是从 Freshdesk 浏览器兼容阅读模式保存的网页摘录。"}\n\n来源：${activeBrowserTab.url}` }));
   };
 
   const fetchBrowserSearch = async (query: string) => {
@@ -1046,7 +1152,7 @@ export default function Home() {
       else {
         const target = virtualPath(argument, terminalCwd);
         if (!virtualFileSystem.directories.includes(virtualParent(target))) output = [`touch: cannot touch '${argument}': No such file or directory`];
-        else { if (!virtualFileSystem.files.includes(target)) setVirtualFileSystem((fileSystem) => ({ ...fileSystem, files: [...fileSystem.files, target] })); output = [`已创建文件 ${displayVirtualPath(target)}`]; }
+        else { if (!virtualFileSystem.files.includes(target)) { setVirtualFileSystem((fileSystem) => ({ ...fileSystem, files: [...fileSystem.files, target] })); setFileContents((contents) => ({ ...contents, [target]: "" })); } output = [`已创建文件 ${displayVirtualPath(target)}`]; }
       }
     } else output = [`${command}: command not found`, "输入 help 查看可用命令。"];
     setTerminalLines((lines) => [...lines, prompt, ...output]);
@@ -1155,16 +1261,18 @@ export default function Home() {
                   <button onClick={() => changeFinderPath(VIRTUAL_HOME)}><CloudSun size={15} /> Freshdesk Drive</button>
                 </aside>
                 <div className="finder-content">
-                  <div className="finder-toolbar"><nav aria-label="文件夹导航"><button aria-label="返回上级目录" disabled={finderPath === VIRTUAL_HOME} onClick={() => changeFinderPath(virtualParent(finderPath))}><ChevronLeft size={17} /></button><button aria-label="前进目录" disabled><ChevronRight size={17} /></button></nav><strong>{finderPath === VIRTUAL_HOME ? "我的文件" : virtualName(finderPath)}</strong><span className="finder-toolbar-note">{displayVirtualPath(finderPath)} · 双击打开</span><LayoutGrid size={17} /></div>
+                  <div className="finder-toolbar"><nav aria-label="文件夹导航"><button aria-label="返回上级目录" disabled={finderPath === VIRTUAL_HOME} onClick={() => changeFinderPath(virtualParent(finderPath))}><ChevronLeft size={17} /></button><button aria-label="前进目录" disabled><ChevronRight size={17} /></button></nav><strong>{finderPath === VIRTUAL_HOME ? "我的文件" : virtualName(finderPath)}</strong><label className="finder-search"><Search size={13} /><input value={finderSearch} onChange={(event) => setFinderSearch(event.target.value)} placeholder="查找文件" aria-label="Finder 文件搜索" /><select value={finderSearchScope} onChange={(event) => setFinderSearchScope(event.target.value as "current" | "downloads" | "pictures")} aria-label="文件搜索范围"><option value="current">当前目录</option><option value="downloads">下载项</option><option value="pictures">图片</option></select></label><span className="finder-toolbar-note">{finderSearch.trim() ? `${finderSearchResults.length} 个结果` : `${displayVirtualPath(finderPath)} · 双击打开`}</span><LayoutGrid size={17} /></div>
                   <div className="folder-grid finder-grid">
-                    {finderEntries.map((entry) => {
-                      const path = `${finderPath}/${entry.name}`;
+                    {visibleFinderEntries.map((entry) => {
+                      const path = finderSearch.trim() ? (entry as unknown as { path: string }).path : `${finderPath}/${entry.name}`;
                       if (entry.type === "directory") return <button key={path} className="folder-card" onDoubleClick={() => changeFinderPath(path)}><Folder size={44} fill="#a4c8ff" strokeWidth={1.2} /><strong>{entry.name}</strong><span>双击打开</span></button>;
-                      return <div key={entry.name} className="finder-file-wrap"><button className="folder-card finder-file-card" draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; setDraggedFilePath(path); }} onDragEnd={() => setDraggedFilePath(null)} onDoubleClick={() => previewableFile(path) && setPreviewFilePath(path)}><FilePlus2 size={38} strokeWidth={1.35} />{renamingPath === path ? <input autoFocus aria-label="重命名文件" value={renameValue} onClick={(event) => event.stopPropagation()} onChange={(event) => setRenameValue(event.target.value)} onBlur={commitRenameFile} onKeyDown={(event) => { if (event.key === "Enter") commitRenameFile(); if (event.key === "Escape") setRenamingPath(null); }} /> : <strong>{entry.name}</strong>}<span>{previewableFile(path) ? "双击预览" : "可拖到回收站"}</span></button><button className="finder-rename" aria-label={`重命名 ${entry.name}`} onClick={() => startRenameFile(path)}><Pencil size={13} /></button></div>;
+                      return <div key={path} className="finder-file-wrap"><button className="folder-card finder-file-card" draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; setDraggedFilePath(path); }} onDragEnd={() => setDraggedFilePath(null)} onContextMenu={(event) => openFinderContextMenu(event, path)} onDoubleClick={() => isTextFile(path) ? openTextEditor(path) : previewableFile(path) && setPreviewFilePath(path)}><FilePlus2 size={38} strokeWidth={1.35} />{renamingPath === path ? <input autoFocus aria-label="重命名文件" value={renameValue} onClick={(event) => event.stopPropagation()} onChange={(event) => setRenameValue(event.target.value)} onBlur={commitRenameFile} onKeyDown={(event) => { if (event.key === "Enter") commitRenameFile(); if (event.key === "Escape") setRenamingPath(null); }} /> : <strong>{entry.name}</strong>}<span>{isTextFile(path) ? "双击编辑 · 右键操作" : previewableFile(path) ? "双击预览 · 右键操作" : "可拖到回收站"}</span></button><button className="finder-rename" aria-label={`重命名 ${entry.name}`} onClick={() => startRenameFile(path)}><Pencil size={13} /></button></div>;
                     })}
                   </div>
-                  <div className="finder-footer"><span>{finderEntries.length} 个项目</span><span>双击预览 · 拖放删除 · 可从回收站恢复</span></div>
-                  {previewFilePath && <div className="finder-preview" role="dialog" aria-label="文件预览"><header><div><FileText size={16} /><span>{virtualName(previewFilePath)}</span></div><button aria-label="关闭文件预览" onClick={() => setPreviewFilePath(null)}><X size={15} /></button></header>{/\.(?:jpg|jpeg|png)$/i.test(previewFilePath) ? <img src={previewFileImage(previewFilePath)} alt={virtualName(previewFilePath)} /> : <pre>{previewFileText(previewFilePath)}</pre>}</div>}
+                  <div className="finder-footer"><span>{finderSearch.trim() ? `${finderSearchResults.length} 个匹配结果` : `${finderEntries.length} 个项目`}</span><span>文本双击编辑 · 右键可管理 · 拖放删除</span></div>
+                  {previewFilePath && <div className="finder-preview" role="dialog" aria-label="文件预览"><header><div><FileText size={16} /><span>{virtualName(previewFilePath)}</span></div><div>{isTextFile(previewFilePath) && <button className="finder-preview-edit" onClick={() => openTextEditor(previewFilePath)}><FilePenLine size={13} /> 编辑</button>}<button aria-label="关闭文件预览" onClick={() => setPreviewFilePath(null)}><X size={15} /></button></div></header>{/\.(?:jpg|jpeg|png)$/i.test(previewFilePath) ? <img src={previewFileImage(previewFilePath)} alt={virtualName(previewFilePath)} /> : <pre>{previewFileText(previewFilePath)}</pre>}</div>}
+                  {fileInfoPath && <div className="finder-file-info" role="dialog" aria-label="文件属性"><header><strong>文件属性</strong><button aria-label="关闭文件属性" onClick={() => setFileInfoPath(null)}><X size={14} /></button></header><dl><div><dt>名称</dt><dd>{virtualName(fileInfoPath)}</dd></div><div><dt>位置</dt><dd>{displayVirtualPath(virtualParent(fileInfoPath))}</dd></div><div><dt>类型</dt><dd>{isTextFile(fileInfoPath) ? "文本文件" : /\.(?:jpg|jpeg|png)$/i.test(fileInfoPath) ? "图片" : "文件"}</dd></div><div><dt>大小</dt><dd>{fileContents[fileInfoPath] ? `${fileContents[fileInfoPath].length} 个字符` : "—"}</dd></div></dl></div>}
+                  {finderContextMenu && <aside className="finder-context-menu" role="menu" style={{ left: finderContextMenu.x, top: finderContextMenu.y }}><button role="menuitem" disabled={!isTextFile(finderContextMenu.path)} onClick={() => openTextEditor(finderContextMenu.path)}><FilePenLine size={14} />编辑</button><button role="menuitem" onClick={() => { startRenameFile(finderContextMenu.path); setFinderContextMenu(null); }}><Pencil size={14} />重命名</button><button role="menuitem" onClick={() => { setFileInfoPath(finderContextMenu.path); setFinderContextMenu(null); }}><CircleHelp size={14} />查看属性</button><button role="menuitem" className="danger" onClick={() => { moveFileToTrash(finderContextMenu.path); setFinderContextMenu(null); }}><Trash2 size={14} />移到回收站</button></aside>}
                 </div>
               </div>
             </WindowChrome>
@@ -1196,6 +1304,12 @@ export default function Home() {
           {windowItem.id === "notes" && (
             <WindowChrome title="便笺" appWindow={windowItem} onClose={() => closeApp("notes")} onMinimize={() => minimizeApp("notes")} onFocus={() => bringToFront("notes")} onMaximize={() => toggleMaximize("notes")} onBoundsChange={(bounds) => updateWindowBounds("notes", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("notes", side)} className="notes-window">
               <div className="notes-body"><aside className="notes-sidebar"><button className="new-note" onClick={createNote}><Plus size={16} /> 新建便笺</button><p>便笺</p>{notes.map((item) => <button className={`note-list-item ${item.id === activeNote.id ? "active" : ""}`} key={item.id} onClick={() => setActiveNoteId(item.id)}><span>{item.title || "未命名便笺"}</span><small>{item.updated}</small></button>)}</aside><article className="note-editor"><header><div><input className="note-title-input" value={activeNote.title} onChange={(event) => updateActiveNote({ title: event.target.value })} aria-label="便笺标题" /><span>{currentDate} · 已自动存储</span></div><button aria-label="新建便笺" onClick={createNote}><FilePlus2 size={18} /></button></header><textarea value={activeNote.body} onChange={(event) => updateActiveNote({ body: event.target.value })} aria-label="编辑便笺" /><footer><span>⌘S 自动储存</span><span>{activeNote.body.length} 个字符</span></footer></article></div>
+            </WindowChrome>
+          )}
+
+          {windowItem.id === "editor" && (
+            <WindowChrome title={editorPath ? virtualName(editorPath) : "文本编辑"} appWindow={windowItem} onClose={() => closeApp("editor")} onMinimize={() => minimizeApp("editor")} onFocus={() => bringToFront("editor")} onMaximize={() => toggleMaximize("editor")} onBoundsChange={(bounds) => updateWindowBounds("editor", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("editor", side)} className="text-editor-window">
+              <div className="text-editor-body"><aside className="text-editor-sidebar"><button className="text-editor-new" onClick={createTextDocument}><Plus size={15} /> 新建文稿</button><p>当前文稿</p>{editorPath ? <div className="text-editor-current"><FileText size={16} /><span>{virtualName(editorPath)}</span><small>{displayVirtualPath(virtualParent(editorPath))}</small></div> : <div className="text-editor-empty-side"><FilePenLine size={20} /><span>从 Finder 打开文本文件，或新建一份文稿。</span></div>}</aside><section className="text-editor-main">{editorPath ? <><header><div><span className="eyebrow">Freshdesk 文本编辑</span><strong>{virtualName(editorPath)}</strong><small>{displayVirtualPath(editorPath)}</small></div><button onClick={saveEditorDocument}><FileText size={14} /> 保存</button></header><textarea value={editorDraft} onChange={(event) => setEditorDraft(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); saveEditorDocument(); } }} aria-label="编辑文本文件" /><footer><span>⌘S 保存至本机桌面状态</span><span>{editorDraft.length} 个字符</span></footer></> : <div className="text-editor-empty"><FilePenLine size={34} /><strong>准备写点什么？</strong><span>在 Finder 中双击 .txt 或 .md 文件即可编辑，也可以直接新建文稿。</span><button onClick={createTextDocument}><Plus size={14} /> 新建文稿</button></div>}</section></div>
             </WindowChrome>
           )}
 
