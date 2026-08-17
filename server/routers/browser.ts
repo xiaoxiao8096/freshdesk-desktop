@@ -51,18 +51,31 @@ function absoluteUrl(href: string, baseUrl: string) {
 }
 
 export function extractReaderLinks(html: string, baseUrl: string, maximum = 14) {
-  const links: ReaderLink[] = [];
+  const parsedBase = new URL(baseUrl);
+  const candidates: Array<ReaderLink & { score: number; order: number }> = [];
   const seen = new Set<string>();
-  const anchorPattern = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-  for (const match of Array.from(html.matchAll(anchorPattern))) {
-    const url = absoluteUrl(decodeEntities(match[1]), baseUrl);
-    const title = textFromHtml(match[2]);
+  const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  const matches = Array.from(html.matchAll(anchorPattern));
+  for (let order = 0; order < matches.length; order += 1) {
+    const match = matches[order];
+    const attributes = match[1];
+    const url = absoluteUrl(decodeEntities(attributeFromTag(attributes, "href")), baseUrl);
+    const imageAlt = match[2].match(/<img\b[^>]*\balt\s*=\s*["']([^"']+)["'][^>]*>/i)?.[1] ?? "";
+    const title = textFromHtml(match[2]) || textFromHtml(attributeFromTag(attributes, "title")) || textFromHtml(attributeFromTag(attributes, "aria-label")) || textFromHtml(decodeEntities(imageAlt));
     if (!url || !title || seen.has(url) || title.length < 2) continue;
     seen.add(url);
-    links.push({ title: title.slice(0, 140), url });
-    if (links.length >= maximum) break;
+    const parsedUrl = new URL(url);
+    const isVideo = /\/(?:video|play)\/(?:BV[a-zA-Z0-9]+|av\d+)|youtu\.be\/|youtube\.com\/watch|vimeo\.com\/\d+/i.test(url);
+    const looksLikeUtility = /\b(?:login|register|signup|privacy|terms|cookie|download|about|contact|help|search|setting|profile|account)\b/i.test(`${title} ${parsedUrl.pathname}`);
+    const looksLikeMetadata = /^(?:\d+\s+(?:minute|hour|day|month|year)s?\s+ago|\d+\s+comments?|\d+\s+points?|hide)$/i.test(title.trim()) || /\/(?:item|user|hide)(?:\?|$)/i.test(parsedUrl.pathname + parsedUrl.search);
+    const looksLikeContent = isVideo || (title.length >= 20 && !looksLikeUtility && !looksLikeMetadata);
+    const score = (isVideo ? 100 : 0) + (looksLikeContent ? 50 : 0) + (parsedUrl.hostname === parsedBase.hostname ? 18 : 0) + (title.length >= 12 ? 4 : 0) - (looksLikeUtility ? 18 : 0) - (looksLikeMetadata ? 30 : 0);
+    candidates.push({ title: title.slice(0, 140), url, score, order });
   }
-  return links;
+  return candidates
+    .sort((left, right) => right.score - left.score || left.order - right.order)
+    .slice(0, maximum)
+    .map(({ title, url }) => ({ title, url }));
 }
 
 function attributeFromTag(tag: string, name: string) {
@@ -95,6 +108,19 @@ export function extractReaderImages(html: string, baseUrl: string, maximum = 10)
     if (images.length >= maximum) break;
   }
   return images;
+}
+
+export function enrichBilibiliVideoTitles(links: ReaderLink[], images: ReaderImage[]) {
+  const cardTitles = images.map((image) => image.alt).filter((alt) => alt && alt !== "网页图片");
+  let cardIndex = 0;
+  return links.map((link) => {
+    const isBilibiliVideo = /(?:^|\.)bilibili\.com\/video\/BV[a-zA-Z0-9]+/i.test(link.url);
+    const looksLikeMetrics = /^(?:[\d.]+万\s+)?\d+\s+\d{1,2}:\d{2}$/.test(link.title.trim());
+    if (!isBilibiliVideo || !looksLikeMetrics) return link;
+    const cardTitle = cardTitles[cardIndex];
+    cardIndex += 1;
+    return cardTitle ? { ...link, title: cardTitle.slice(0, 140) } : link;
+  });
 }
 
 function titleFromHtml(html: string) {
@@ -140,12 +166,14 @@ export const browserRouter = router({
     try {
       const { html, finalUrl } = await fetchHtml(parsed.toString());
       const text = textFromHtml(html);
+      const images = extractReaderImages(html, finalUrl);
+      const links = enrichBilibiliVideoTitles(extractReaderLinks(html, finalUrl, 80), images);
       return {
         url: finalUrl,
         title: titleFromHtml(html),
         summary: text.slice(0, 1100) || "该网页没有可提取的文本内容。",
-        links: extractReaderLinks(html, finalUrl),
-        images: extractReaderImages(html, finalUrl),
+        links,
+        images,
       };
     } catch (error) {
       throw new TRPCError({ code: "BAD_GATEWAY", message: error instanceof Error ? error.message : "暂时无法读取该网页。" });

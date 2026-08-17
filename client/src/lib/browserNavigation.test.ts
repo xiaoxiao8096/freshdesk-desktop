@@ -17,4 +17,14 @@ describe("appendNavigationRoute", () => {
     expect(result.history).toEqual([{ ...route, title: "页面已刷新" }]);
     expect(result.historyIndex).toBe(0);
   });
+
+  it("keeps successive in-site reader links in one current-tab path for back navigation", () => {
+    const home = { url: "https://news.example.com/home", title: "新闻首页", mode: "reader" as const };
+    const article = { url: "https://news.example.com/article/42", title: "深度报道", mode: "reader" as const };
+    const video = { url: "https://news.example.com/video/9", title: "现场视频", mode: "reader" as const };
+    const afterArticle = appendNavigationRoute([home], 0, article);
+    const afterVideo = appendNavigationRoute(afterArticle.history, afterArticle.historyIndex, video);
+    expect(afterVideo.history.map((route) => route.url)).toEqual([home.url, article.url, video.url]);
+    expect(afterVideo.historyIndex).toBe(2);
+  });
 });
