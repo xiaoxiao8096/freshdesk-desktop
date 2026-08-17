@@ -4,6 +4,7 @@ import { z } from "zod";
 import { publicProcedure, router } from "../_core/trpc";
 
 type ReaderLink = { title: string; url: string };
+type ReaderImage = { src: string; alt: string };
 
 const browserInput = z.object({ url: z.string().trim().min(1).max(2048) });
 const searchInput = z.object({ query: z.string().trim().min(1).max(240) });
@@ -64,6 +65,38 @@ export function extractReaderLinks(html: string, baseUrl: string, maximum = 14) 
   return links;
 }
 
+function attributeFromTag(tag: string, name: string) {
+  const expression = new RegExp(`\\b${name}\\s*=\\s*["']([^"']+)["']`, "i");
+  return tag.match(expression)?.[1] ?? "";
+}
+
+export function extractReaderImages(html: string, baseUrl: string, maximum = 10) {
+  const images: ReaderImage[] = [];
+  const seen = new Set<string>();
+  const add = (rawSrc: string, rawAlt = "") => {
+    const src = absoluteUrl(decodeEntities(rawSrc), baseUrl);
+    if (!src || seen.has(src)) return;
+    seen.add(src);
+    images.push({ src, alt: textFromHtml(decodeEntities(rawAlt)).slice(0, 120) || "网页图片" });
+  };
+  for (const match of Array.from(html.matchAll(/<meta\b[^>]*>/gi))) {
+    const tag = match[0];
+    const property = attributeFromTag(tag, "property").toLowerCase();
+    if (property === "og:image" || property === "twitter:image") add(attributeFromTag(tag, "content"));
+    if (images.length >= maximum) return images;
+  }
+  for (const match of Array.from(html.matchAll(/<img\b[^>]*>/gi))) {
+    const tag = match[0];
+    const src = attributeFromTag(tag, "src");
+    const width = Number(attributeFromTag(tag, "width"));
+    const height = Number(attributeFromTag(tag, "height"));
+    const decorative = /\/static\/images\/|(?:20|25|32|40|50)px-|(?:icon|wordmark|tagline)/i.test(src) || (Number.isFinite(width) && width > 0 && width < 70) || (Number.isFinite(height) && height > 0 && height < 70);
+    if (!decorative) add(src, attributeFromTag(tag, "alt"));
+    if (images.length >= maximum) break;
+  }
+  return images;
+}
+
 function titleFromHtml(html: string) {
   const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   return match ? textFromHtml(match[1]).slice(0, 160) : "未命名页面";
@@ -85,7 +118,7 @@ async function fetchHtml(url: string) {
     const contentType = response.headers.get("content-type") ?? "";
     if (!/text\/html|application\/xhtml\+xml/i.test(contentType)) throw new Error("该链接不是可阅读的网页内容");
     const html = await response.text();
-    if (html.length > 2_000_000) throw new Error("网页内容过大");
+    if (html.length > 5_000_000) throw new Error("网页内容过大，请尝试直连浏览或打开更具体的页面。");
     return { html, finalUrl: response.url };
   } finally {
     clearTimeout(timeout);
@@ -112,6 +145,7 @@ export const browserRouter = router({
         title: titleFromHtml(html),
         summary: text.slice(0, 1100) || "该网页没有可提取的文本内容。",
         links: extractReaderLinks(html, finalUrl),
+        images: extractReaderImages(html, finalUrl),
       };
     } catch (error) {
       throw new TRPCError({ code: "BAD_GATEWAY", message: error instanceof Error ? error.message : "暂时无法读取该网页。" });

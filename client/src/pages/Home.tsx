@@ -61,6 +61,8 @@ import {
   Wifi,
   Wind,
   X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 
 type AppName = "finder" | "music" | "notes" | "photos" | "settings" | "terminal" | "browser" | "weather" | "calendar" | "reminders" | "trash" | "editor";
@@ -85,11 +87,19 @@ type BrowserTab = {
   reloadNonce: number;
   pinned: boolean;
   groupId?: string;
-  mode?: "web" | "search" | "reader";
+  mode?: "web" | "search" | "reader" | "media";
   searchQuery?: string;
   searchResults?: BrowserSearchResult[];
   searchSummary?: string;
   searchError?: string;
+  mediaItems?: BrowserMediaItem[];
+  mediaIndex?: number;
+  readerOriginUrl?: string;
+};
+
+type BrowserMediaItem = {
+  src: string;
+  alt: string;
 };
 
 type BrowserSearchResult = {
@@ -571,6 +581,9 @@ export default function Home() {
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
+  const [mediaZoom, setMediaZoom] = useState(100);
+  const [mediaImageError, setMediaImageError] = useState<string | null>(null);
+  const [frameStatus, setFrameStatus] = useState<"idle" | "loading" | "loaded" | "restricted">("idle");
   const [browserHistoryEntries, setBrowserHistoryEntries] = useState<BrowserHistoryEntry[]>(() => restoredDesktopState?.browserHistoryEntries ?? []);
   const [browserDownloads, setBrowserDownloads] = useState<BrowserDownload[]>(() => restoredDesktopState?.browserDownloads ?? []);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
@@ -815,6 +828,13 @@ export default function Home() {
     recordBrowserHistory(activeBrowserTab.title, activeBrowserTab.url, "web");
   }, [activeBrowserTab?.id, activeBrowserTab?.loading, activeBrowserTab?.mode, activeBrowserTab?.title, activeBrowserTab?.url]);
 
+  useEffect(() => {
+    if (!activeBrowserTab || activeBrowserTab.mode !== "web") { setFrameStatus("idle"); return; }
+    setFrameStatus("loading");
+    const timeout = window.setTimeout(() => setFrameStatus((status) => status === "loading" ? "restricted" : status), 6500);
+    return () => window.clearTimeout(timeout);
+  }, [activeBrowserTab?.id, activeBrowserTab?.mode, activeBrowserTab?.reloadNonce, activeBrowserTab?.url]);
+
   const bringToFront = (id: AppName) => {
     setWindows((currentWindows) => {
       const top = Math.max(25, ...currentWindows.map((item) => item.zIndex));
@@ -951,6 +971,32 @@ export default function Home() {
     updateActiveBrowserTab((tab) => ({ ...tab, mode: "reader", loading: true, title: `阅读：${labelFromUrl(tab.url)}` }));
   };
 
+  const openReaderImage = (index: number) => {
+    const images = readerQuery.data?.images ?? [];
+    const item = images[index];
+    if (!item) return;
+    updateActiveBrowserTab((tab) => ({ ...tab, mode: "media", title: item.alt || "网页图片", address: item.src, url: item.src, loading: false, mediaItems: images, mediaIndex: index, readerOriginUrl: tab.url }));
+    setMediaZoom(100);
+    setMediaImageError(null);
+  };
+
+  const stepReaderImage = (direction: -1 | 1) => {
+    updateActiveBrowserTab((tab) => {
+      const items = tab.mediaItems ?? [];
+      if (!items.length) return tab;
+      const currentIndex = tab.mediaIndex ?? 0;
+      const nextIndex = (currentIndex + direction + items.length) % items.length;
+      const next = items[nextIndex];
+      return { ...tab, mediaIndex: nextIndex, title: next.alt || "网页图片", address: next.src, url: next.src };
+    });
+    setMediaImageError(null);
+  };
+
+  const returnToReader = () => {
+    updateActiveBrowserTab((tab) => ({ ...tab, mode: "reader", title: `阅读：${labelFromUrl(tab.readerOriginUrl ?? tab.url)}`, address: tab.readerOriginUrl ?? tab.address, url: tab.readerOriginUrl ?? tab.url, loading: false }));
+    setMediaZoom(100);
+  };
+
   const openBrowserSearchResult = (result: BrowserSearchResult) => openInReader(result.url, result.title);
 
   const stepBrowserHistory = (direction: -1 | 1) => {
@@ -963,6 +1009,7 @@ export default function Home() {
   };
 
   const refreshBrowser = () => {
+    if (activeBrowserTab?.mode === "media") return;
     if (activeBrowserTab?.mode === "search") { void fetchBrowserSearch(activeBrowserTab.searchQuery ?? activeBrowserTab.address); return; }
     updateActiveBrowserTab((tab) => ({ ...tab, loading: true, reloadNonce: tab.reloadNonce + 1 }));
   };
@@ -1342,7 +1389,7 @@ export default function Home() {
                 </div>
                 <form className="browser-toolbar" onSubmit={(event) => { event.preventDefault(); navigateBrowser(activeBrowserTab.address); }}>
                   <div className="browser-nav-controls">
-                    <button type="button" aria-label="后退" disabled={activeBrowserTab.historyIndex === 0} onClick={() => stepBrowserHistory(-1)}><ArrowLeft size={16} /></button>
+                    <button type="button" aria-label="后退" disabled={activeBrowserTab.mode !== "media" && activeBrowserTab.historyIndex === 0} onClick={() => activeBrowserTab.mode === "media" ? returnToReader() : stepBrowserHistory(-1)}><ArrowLeft size={16} /></button>
                     <button type="button" aria-label="前进" disabled={activeBrowserTab.historyIndex >= activeBrowserTab.history.length - 1} onClick={() => stepBrowserHistory(1)}><ArrowRight size={16} /></button>
                     <button type="button" aria-label="刷新" onClick={refreshBrowser}><RotateCw size={15} className={activeBrowserTab.loading ? "spinning" : ""} /></button>
                   </div>
@@ -1351,17 +1398,20 @@ export default function Home() {
                   <span className="browser-status">{activeBrowserTab.loading ? "正在连接" : "浏览器"}</span>
                 </form>
                 <div className="browser-frame-wrap">
-                  {activeBrowserTab.mode === "reader" ? (
+                  {activeBrowserTab.mode === "media" ? (
+                    <section className="browser-media-page">
+                      <header><div><span className="eyebrow">当前标签 · 图片查看</span><h2>{activeBrowserTab.title}</h2><p>{activeBrowserTab.mediaItems?.length ? `${(activeBrowserTab.mediaIndex ?? 0) + 1} / ${activeBrowserTab.mediaItems.length} · 图片留在当前标签中查看` : "公开图片资源"}</p></div><div className="media-actions"><button onClick={returnToReader}><ArrowLeft size={14} /> 返回文章</button><button onClick={() => setMediaZoom((value) => Math.max(60, value - 20))} aria-label="缩小图片"><ZoomOut size={15} /></button><span>{mediaZoom}%</span><button onClick={() => setMediaZoom((value) => Math.min(220, value + 20))} aria-label="放大图片"><ZoomIn size={15} /></button></div></header><div className="browser-media-stage"><button aria-label="上一张图片" disabled={(activeBrowserTab.mediaItems?.length ?? 0) < 2} onClick={() => stepReaderImage(-1)}><ChevronLeft size={22} /></button><figure>{mediaImageError ? <div className="browser-media-error"><CircleHelp size={24} /><strong>图片暂时无法加载</strong><span>{mediaImageError}</span><button onClick={() => setMediaImageError(null)}>重试</button></div> : <img src={activeBrowserTab.url} alt={activeBrowserTab.title} style={{ transform: `scale(${mediaZoom / 100})` }} onError={() => setMediaImageError("该图片来源拒绝了嵌入或暂时不可用。可返回文章继续阅读其他内容。")} />}<figcaption>{activeBrowserTab.title}</figcaption></figure><button aria-label="下一张图片" disabled={(activeBrowserTab.mediaItems?.length ?? 0) < 2} onClick={() => stepReaderImage(1)}><ChevronRight size={22} /></button></div><div className="browser-media-strip">{activeBrowserTab.mediaItems?.map((item, index) => <button key={item.src} className={index === activeBrowserTab.mediaIndex ? "active" : ""} onClick={() => { updateActiveBrowserTab((tab) => ({ ...tab, mediaIndex: index, title: item.alt || "网页图片", address: item.src, url: item.src })); setMediaImageError(null); }}><img src={item.src} alt={item.alt} /></button>)}</div></section>
+                  ) : activeBrowserTab.mode === "reader" ? (
                     <section className="browser-reader-page">
                       <header>
                         <div><span className="eyebrow">当前标签 · 兼容阅读</span><h2>{readerQuery.data?.title || activeBrowserTab.title}</h2><p>{labelFromUrl(activeBrowserTab.url)} · 已将可读取内容与链接保留在系统内。</p></div>
                         <div className="reader-actions"><button onClick={saveCurrentDownload}><Download size={14} /> 保存到下载项</button><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", loading: true }))}>尝试直连</button></div>
                       </header>
-                      {readerQuery.isLoading || readerQuery.isFetching ? <div className="browser-reader-loading"><RotateCw className="spinning" size={18} /> 正在读取网页内容…</div> : readerQuery.error ? <div className="browser-reader-error"><CircleHelp size={18} /><strong>此网页暂时无法读取</strong><span>{readerQuery.error.message}</span><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", loading: true }))}>改为直连尝试</button></div> : <div className="browser-reader-content"><p className="reader-summary">{readerQuery.data?.summary}</p><div className="reader-links"><h3>页面链接</h3>{readerQuery.data?.links.length ? readerQuery.data.links.map((link) => <button key={`${link.url}-${link.title}`} onClick={() => openInReader(link.url, link.title)}><Globe2 size={14} /><span><b>{link.title}</b><small>{labelFromUrl(link.url)}</small></span><ChevronRight size={15} /></button>) : <p>没有检测到可继续访问的公开链接。</p>}</div></div>}
+                      {readerQuery.isLoading || readerQuery.isFetching ? <div className="browser-reader-loading"><RotateCw className="spinning" size={18} /> 正在读取网页内容…</div> : readerQuery.error ? <div className="browser-reader-error"><CircleHelp size={18} /><strong>此网页暂时无法读取</strong><span>{readerQuery.error.message}</span><button onClick={() => updateActiveBrowserTab((tab) => ({ ...tab, mode: "web", loading: true }))}>改为直连尝试</button></div> : <div className="browser-reader-content"><p className="reader-summary">{readerQuery.data?.summary}</p>{readerQuery.data?.images.length ? <div className="reader-media"><div><h3>页面图片</h3><span>{readerQuery.data.images.length} 张公开图片 · 点击在当前标签查看</span></div><div className="reader-media-grid">{readerQuery.data.images.map((image, index) => <button key={image.src} onClick={() => openReaderImage(index)}><img src={image.src} alt={image.alt} /><span>{image.alt}</span></button>)}</div></div> : null}<div className="reader-links"><h3>页面链接</h3>{readerQuery.data?.links.length ? readerQuery.data.links.map((link) => <button key={`${link.url}-${link.title}`} onClick={() => openInReader(link.url, link.title)}><Globe2 size={14} /><span><b>{link.title}</b><small>{labelFromUrl(link.url)}</small></span><ChevronRight size={15} /></button>) : <p>没有检测到可继续访问的公开链接。</p>}</div></div>}
                     </section>
                   ) : activeBrowserTab.mode === "search" ? (
                     <section className="browser-search-page"><header><span className="eyebrow">Freshdesk Search</span><h2>{activeBrowserTab.searchQuery ? `“${activeBrowserTab.searchQuery}”` : "在这里搜索互联网"}</h2><p>{activeBrowserTab.searchError || activeBrowserTab.searchSummary || "输入关键词，搜索结果会保留在当前浏览器窗口中。"}</p></header>{activeBrowserTab.loading ? <div className="browser-search-loading"><RotateCw className="spinning" size={18} /> 正在检索公开结果…</div> : activeBrowserTab.searchResults?.length ? <div className="browser-search-results">{activeBrowserTab.searchResults.map((result) => <button key={`${result.url}-${result.title}`} onClick={() => openBrowserSearchResult(result)}><span className="browser-result-top"><Globe2 size={14} /> {result.source ?? labelFromUrl(result.url)}</span><strong>{result.title}</strong><p>{result.snippet}</p><small>{labelFromUrl(result.url)} · 在当前标签打开</small></button>)}</div> : <div className="browser-search-empty"><Compass size={28} /><strong>等待一个搜索词</strong><span>可输入“163邮箱登录入口”“OpenAI”或完整网址；结果会在当前标签中继续阅读。</span></div>}</section>
-                  ) : <><iframe key={`${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 浏览器内容" src={activeBrowserTab.url} sandbox="allow-forms allow-scripts allow-same-origin" referrerPolicy="strict-origin-when-cross-origin" onLoad={() => updateActiveBrowserTab((tab) => ({ ...tab, loading: false }))} /><div className="browser-frame-note"><CircleHelp size={13} /><span>直连页面会留在当前窗口；若站内链接要求新窗口或拒绝嵌入，请切换“兼容阅读”继续在当前标签浏览。</span><button onClick={openReaderMode}>兼容阅读</button></div></>}
+                  ) : <><iframe key={`${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 浏览器内容" src={activeBrowserTab.url} sandbox="allow-forms allow-scripts allow-same-origin" referrerPolicy="strict-origin-when-cross-origin" onLoad={() => { setFrameStatus("loaded"); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} /><div className={`browser-frame-note ${frameStatus}`}><CircleHelp size={13} /><span>{frameStatus === "loading" ? "正在连接直连页面；若网站阻止嵌入，会自动给出兼容阅读入口。" : frameStatus === "restricted" ? "该页面长时间未能嵌入，可能被网站安全策略限制。可切换兼容阅读继续留在当前标签。" : "直连页面已加载；若内容空白或站内链接要求新窗口，可切换兼容阅读继续浏览。"}</span><button onClick={openReaderMode}>兼容阅读</button></div></>}
                   {bookmarksOpen && <aside className="bookmark-drawer"><header><div><Bookmark size={15} /><span>收藏夹</span></div><button aria-label="关闭收藏夹" onClick={() => setBookmarksOpen(false)}><X size={14} /></button></header>{bookmarks.length ? <div className="bookmark-list">{bookmarks.map((bookmark) => <button key={bookmark.id} onClick={() => openBookmark(bookmark)}><Globe2 size={14} /><span><b>{bookmark.title}</b><small>{labelFromUrl(bookmark.url)}</small></span></button>)}</div> : <div className="bookmark-empty"><Bookmark size={18} /><span>还没有收藏的页面</span></div>}</aside>}
                   {historyOpen && <aside className="bookmark-drawer browser-history-drawer"><header><div><History size={15} /><span>浏览历史</span></div><button aria-label="关闭浏览历史" onClick={() => setHistoryOpen(false)}><X size={14} /></button></header>{browserHistoryEntries.length ? <div className="bookmark-list">{browserHistoryEntries.map((entry) => <button key={entry.id} onClick={() => entry.mode === "search" ? void fetchBrowserSearch(entry.address.replace(/^search:/, "")) : entry.mode === "reader" ? openInReader(entry.address, entry.title) : navigateBrowser(entry.address)}><History size={14} /><span><b>{entry.title}</b><small>{entry.visitedAt} · {labelFromUrl(entry.address.replace(/^search:/, ""))}</small></span></button>)}</div> : <div className="bookmark-empty"><History size={18} /><span>还没有浏览记录</span></div>}<footer><button onClick={() => setBrowserHistoryEntries([])}>清除历史记录</button></footer></aside>}
                   {downloadsOpen && <aside className="bookmark-drawer browser-history-drawer"><header><div><Download size={15} /><span>下载项</span></div><button aria-label="关闭下载项" onClick={() => setDownloadsOpen(false)}><X size={14} /></button></header>{browserDownloads.length ? <div className="bookmark-list">{browserDownloads.map((item) => <button key={item.id} onClick={() => { setPreviewFilePath(`${VIRTUAL_HOME}/Downloads/${item.title}`); openApp("finder"); }}><FileText size={14} /><span><b>{item.title}</b><small>{item.createdAt} · {item.status}</small></span></button>)}</div> : <div className="bookmark-empty"><Download size={18} /><span>在兼容阅读页面点“保存到下载项”即可添加</span></div>}<footer><button onClick={() => setBrowserDownloads([])}>清空下载记录</button></footer></aside>}
