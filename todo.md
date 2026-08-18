@@ -125,3 +125,4 @@
 - [x] 验证桌面版字体加载并加入可打包的字体回退，确保远程字体不可用时仍与网页版保持接近的排版层级。
 - [ ] 补充 Electron 浏览器原生前进后退一致性验证，覆盖 webview 步进后 tab.url、地址栏、标题与 historyIndex 同步结果。
 - [ ] 加入可打包的本地字体资源方案，并验证远程 Google Fonts 不可用时 Windows Electron 的主要文字和等宽层级仍可用。
+- [ ] 修复 Windows 正式安装包中 Electron 主进程加载 CommonJS 自动更新模块时报错的问题，并重新发布、部署与启动验证 v1.0.1。
