@@ -1,13 +1,13 @@
-export type BrowserOpenMode = "web" | "video";
+export type BrowserOpenMode = "web";
 
-export function desktopBrowserOpenMode(isElectronDesktop: boolean, hasRecognizedVideo: boolean): BrowserOpenMode {
-  return isElectronDesktop || !hasRecognizedVideo ? "web" : "video";
+export function desktopBrowserOpenMode(): BrowserOpenMode {
+  return "web";
 }
 
 export function desktopSearchUrl(query: string) {
   return `https://www.bing.com/search?q=${encodeURIComponent(query.trim())}`;
 }
 
-export function shouldAutoOpenReader(isElectronDesktop: boolean, embedIsRestricted: boolean) {
-  return !isElectronDesktop && embedIsRestricted;
+export function shouldAutoOpenReader() {
+  return false;
 }

@@ -13,7 +13,7 @@ import { bringWindowToFront, clampRestoredWindowBounds, closeAllWindows, closeWi
 import { recordRecentVideo } from "@/lib/recentVideos";
 import { loadStoredSnapshot } from "@/lib/desktopSnapshot";
 import { createDesktopBackup, desktopBackupFilename, parseDesktopBackup } from "@/lib/desktopBackup";
-import { desktopBrowserOpenMode, desktopSearchUrl, shouldAutoOpenReader } from "@/lib/desktopBrowserMode";
+import { desktopSearchUrl } from "@/lib/desktopBrowserMode";
 import {
   Archive,
   ArrowLeft,
@@ -419,7 +419,7 @@ function normalizeBrowserHistory(history: unknown, fallbackUrl: string, fallback
     if (!entry || typeof entry !== "object" || !("url" in entry) || typeof entry.url !== "string") return [];
     const candidate = entry as Partial<BrowserRoute>;
     const url = entry.url;
-    const mode = candidate.mode === "search" || candidate.mode === "reader" || candidate.mode === "web" || candidate.mode === "video" ? candidate.mode : fallbackMode;
+    const mode = url === "about:blank" ? "search" : "web";
     return [{ url, address: candidate.address ?? url, title: candidate.title ?? labelFromUrl(url), mode }];
   });
   return routes.length ? routes : [{ url: fallbackUrl, address: fallbackUrl === "about:blank" ? "" : fallbackUrl, title: labelFromUrl(fallbackUrl), mode: fallbackUrl === "about:blank" ? "search" : fallbackMode }];
@@ -634,13 +634,15 @@ export default function Home() {
   const [snapPreview, setSnapPreview] = useState<SnapTarget | null>(null);
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>(() => restoredDesktopState?.browserTabs?.length ? restoredDesktopState.browserTabs.map((tab) => {
-    const history = normalizeBrowserHistory(tab.history, tab.url, tab.mode === "search" ? "search" : tab.mode === "reader" ? "reader" : "web");
-    return { ...tab, history, historyIndex: Math.min(Math.max(tab.historyIndex ?? history.length - 1, 0), history.length - 1), loading: false };
+    const fallbackMode = tab.url === "about:blank" ? "search" : "web";
+    const history = normalizeBrowserHistory(tab.history, tab.url, fallbackMode);
+    return { ...tab, mode: fallbackMode, history, historyIndex: Math.min(Math.max(tab.historyIndex ?? history.length - 1, 0), history.length - 1), loading: false };
   }) : [
     { id: "welcome", title: "新标签页", address: "", url: "about:blank", history: [{ url: "about:blank", address: "", title: "新标签页", mode: "search" }], historyIndex: 0, loading: false, reloadNonce: 0, pinned: true, mode: "search" },
   ]);
   const [activeBrowserTabId, setActiveBrowserTabId] = useState(() => restoredDesktopState?.activeBrowserTabId ?? "welcome");
   const [browserTabGroups, setBrowserTabGroups] = useState<BrowserTabGroup[]>(() => restoredDesktopState?.browserTabGroups ?? []);
+  const [browserSidebarOpen, setBrowserSidebarOpen] = useState(true);
   const [groupsOpen, setGroupsOpen] = useState(false);
   const [bookmarks, setBookmarks] = useState<BrowserBookmark[]>(() => restoredDesktopState?.bookmarks ?? [
     { id: "freshdesk", title: "Freshdesk Desktop", url: "https://example.com" },
@@ -657,7 +659,7 @@ export default function Home() {
   const [desktopUpdateStatus, setDesktopUpdateStatus] = useState(() => window.freshdeskDesktop?.isElectron ? "正在等待更新检查…" : "网页版会随发布即时更新");
   const [desktopBackupStatus, setDesktopBackupStatus] = useState("数据仅保存在当前设备；可随时导出或创建备份。");
   const [readerLinkFilter, setReaderLinkFilter] = useState("");
-  const [browserHistoryEntries, setBrowserHistoryEntries] = useState<BrowserHistoryEntry[]>(() => restoredDesktopState?.browserHistoryEntries ?? []);
+  const [browserHistoryEntries, setBrowserHistoryEntries] = useState<BrowserHistoryEntry[]>(() => (restoredDesktopState?.browserHistoryEntries ?? []).map((entry) => ({ ...entry, mode: entry.mode === "search" ? "search" : "web" })));
   const [browserDownloads, setBrowserDownloads] = useState<BrowserDownload[]>(() => restoredDesktopState?.browserDownloads ?? []);
   const [recentVideos, setRecentVideos] = useState<RecentVideo[]>(() => restoredDesktopState?.recentVideos ?? []);
   const [videoPlaybackReports, setVideoPlaybackReports] = useState<VideoPlaybackReport[]>(() => restoredDesktopState?.videoPlaybackReports ?? []);
@@ -1062,22 +1064,6 @@ export default function Home() {
   }, [activeBrowserTab?.id, activeBrowserTab?.mode, activeBrowserTab?.reloadNonce, activeBrowserTab?.url, isElectronDesktop]);
 
   useEffect(() => {
-    if (!shouldAutoOpenReader(isElectronDesktop, frameStatus === "restricted") || !activeBrowserTab || activeBrowserTab.mode !== "web") return;
-    const tabId = activeBrowserTab.id;
-    const timeout = window.setTimeout(() => {
-      setBrowserTabs((tabs) => tabs.map((tab) => tab.id === tabId && tab.mode === "web" ? appendBrowserRoute(tab, { url: tab.url, address: tab.url, title: `阅读：${tab.title}`, mode: "reader" }) : tab));
-      setBrowserFallbackNotice("该网页长时间未允许嵌入，已自动切换到当前标签的兼容阅读。公开链接仍可继续点击；不会跳转到外部浏览器。");
-      setFrameStatus("idle");
-    }, 160);
-    return () => window.clearTimeout(timeout);
-  }, [activeBrowserTab?.id, activeBrowserTab?.mode, frameStatus, isElectronDesktop]);
-
-  useEffect(() => {
-    if (isElectronDesktop || !activeBrowserTab || activeBrowserTab.mode !== "web" || !embedInspectionQuery.data || embedInspectionQuery.data.canEmbed) return;
-    autoDegradeWebTab(`${embedInspectionQuery.data.reason} 已自动切换到当前标签的兼容阅读；不会跳转外部浏览器。`);
-  }, [activeBrowserTab?.id, activeBrowserTab?.mode, embedInspectionQuery.data?.canEmbed, embedInspectionQuery.data?.reason, isElectronDesktop]);
-
-  useEffect(() => {
     if (!isElectronDesktop || !window.freshdeskDesktop?.onUpdateStatus) return;
     return window.freshdeskDesktop.onUpdateStatus((status) => setDesktopUpdateStatus(status.message));
   }, [isElectronDesktop]);
@@ -1243,29 +1229,16 @@ export default function Home() {
   };
 
   const openInReader = (url: string, title?: string) => {
-    const nextUrl = normalizeUrl(url);
-    const videoSource = resolveBrowserVideo(nextUrl);
-    updateActiveBrowserTab((tab) => {
-      const route: BrowserRoute = { url: nextUrl, address: nextUrl, title: title || (videoSource?.title ?? `阅读：${labelFromUrl(nextUrl)}`), mode: videoSource ? "video" : "reader", videoSource: videoSource ?? undefined };
-      return { ...appendBrowserRoute(tab, route, videoSource?.kind === "restricted" ? false : true), videoSource: videoSource ?? undefined };
-    });
-    setBookmarksOpen(false);
-    setHistoryOpen(false);
-    setDownloadsOpen(false);
-    setReaderLinkFilter("");
-    setVideoError(null);
+    openWebInCurrentTab(url, title);
   };
 
   const openWebInCurrentTab = (url: string, title?: string) => {
     const nextUrl = normalizeUrl(url);
-    const videoSource = resolveBrowserVideo(nextUrl);
-    const routeMode = desktopBrowserOpenMode(isElectronDesktop, Boolean(videoSource));
     updateActiveBrowserTab((tab) => {
-      const route: BrowserRoute = { url: nextUrl, address: nextUrl, title: title || videoSource?.title || labelFromUrl(nextUrl), mode: routeMode, videoSource: routeMode === "video" ? videoSource ?? undefined : undefined };
-      return { ...appendBrowserRoute(tab, route, routeMode === "video" && videoSource?.kind === "restricted" ? false : true), videoSource: routeMode === "video" ? videoSource ?? undefined : undefined };
+      const route: BrowserRoute = { url: nextUrl, address: nextUrl, title: title || labelFromUrl(nextUrl), mode: "web" };
+      return { ...appendBrowserRoute(tab, route), videoSource: undefined, mediaItems: undefined, mediaIndex: undefined };
     });
     setBrowserFallbackNotice("");
-    setReaderLinkFilter("");
     setVideoError(null);
   };
 
@@ -1279,10 +1252,8 @@ export default function Home() {
 
   const autoDegradeWebTab = (reason: string) => {
     if (!activeBrowserTab || activeBrowserTab.mode !== "web") return;
-    const tabId = activeBrowserTab.id;
-    setBrowserTabs((tabs) => tabs.map((tab) => tab.id === tabId && tab.mode === "web" ? appendBrowserRoute(tab, { url: tab.url, address: tab.url, title: `阅读：${tab.title}`, mode: "reader" }) : tab));
-    setBrowserFallbackNotice(reason);
-    setFrameStatus("idle");
+    setBrowserFallbackNotice(`${reason} 网页仍保留在当前标签中；可刷新、返回或输入其他网址。`);
+    setFrameStatus("error");
   };
 
   const startBrowserDownload = (url: string, title: string) => {
@@ -1358,12 +1329,8 @@ export default function Home() {
 
   const navigateBrowser = (value: string) => {
     if (looksLikeSearch(value)) {
-      if (isElectronDesktop) {
-        const query = value.trim();
-        openWebInCurrentTab(desktopSearchUrl(query), `搜索：${query}`);
-        return;
-      }
-      void fetchBrowserSearch(value);
+      const query = value.trim();
+      openWebInCurrentTab(desktopSearchUrl(query), `搜索：${query}`);
       return;
     }
     openWebInCurrentTab(value);
@@ -1889,28 +1856,28 @@ export default function Home() {
             <WindowChrome title="浏览器" appWindow={windowItem} onClose={() => closeApp("browser")} onMinimize={() => minimizeApp("browser")} onFocus={() => bringToFront("browser")} onMaximize={() => toggleMaximize("browser")} onBoundsChange={(bounds) => updateWindowBounds("browser", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("browser", side)} className="browser-window">
               <div className="browser-body">
                 <div className="browser-tabstrip" aria-label="浏览器标签页">
+                  <button className={`browser-sidebar-toggle ${browserSidebarOpen ? "active" : ""}`} type="button" aria-label={browserSidebarOpen ? "收起侧边栏" : "展开侧边栏"} onClick={() => setBrowserSidebarOpen((open) => !open)}><LayoutGrid size={14} /></button>
                   <div className="browser-tabs">
                     {pinnedTabs.map((tab) => renderBrowserTab(tab))}
                     {browserTabGroups.map((group) => <div className={`browser-tab-group ${group.collapsed ? "collapsed" : ""}`} style={{ "--group-color": group.color } as React.CSSProperties} key={group.id} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); if (draggedTabId) assignBrowserTabToGroup(draggedTabId, group.id); setDraggedTabId(null); }}><button className="browser-group-label" onClick={() => toggleGroupCollapsed(group.id)}><i /><span>{group.title}</span><small>{groupedTabs(group.id).length}</small></button>{!group.collapsed && groupedTabs(group.id).map((tab) => renderBrowserTab(tab, group.color))}</div>)}
                     {ungroupedTabs.map((tab) => renderBrowserTab(tab))}
                   </div>
                   <button className="browser-tab-add" aria-label="新建标签页" onClick={() => addBrowserTab()}><Plus size={15} /></button>
-                  <button className={`browser-groups-toggle ${groupsOpen ? "active" : ""}`} aria-label="管理标签页分组" onClick={() => { setGroupsOpen(!groupsOpen); setBookmarksOpen(false); }}><LayoutGrid size={14} /><span>分组</span></button>
-                  <button className={`browser-bookmarks-toggle ${bookmarksOpen ? "active" : ""}`} aria-label="打开书签收藏夹" onClick={() => { setBookmarksOpen(!bookmarksOpen); setGroupsOpen(false); }}><Bookmark size={14} /><span>收藏</span></button>
-                  <button className={`browser-bookmarks-toggle ${historyOpen ? "active" : ""}`} aria-label="打开浏览历史" onClick={() => { setHistoryOpen(!historyOpen); setBookmarksOpen(false); setGroupsOpen(false); setDownloadsOpen(false); }}><History size={14} /><span>历史</span></button>
-                  <button className={`browser-bookmarks-toggle ${recentVideosOpen ? "active" : ""}`} aria-label="打开最近播放" onClick={() => { setRecentVideosOpen(!recentVideosOpen); setBookmarksOpen(false); setGroupsOpen(false); setDownloadsOpen(false); setHistoryOpen(false); }}><Play size={14} /><span>最近</span></button>
-                  <button className={`browser-bookmarks-toggle ${downloadsOpen ? "active" : ""}`} aria-label="打开下载项" onClick={() => { setDownloadsOpen(!downloadsOpen); setBookmarksOpen(false); setGroupsOpen(false); setHistoryOpen(false); }}><Download size={14} /><span>下载</span></button>
                 </div>
                 <form className="browser-toolbar" onSubmit={(event) => { event.preventDefault(); navigateBrowser(activeBrowserTab.address); }}>
                   <div className="browser-nav-controls">
-                    <button type="button" aria-label="后退" disabled={activeBrowserTab.mode !== "media" && activeBrowserTab.historyIndex === 0} onClick={() => activeBrowserTab.mode === "media" ? returnToReader() : stepBrowserHistory(-1)}><ArrowLeft size={16} /></button>
+                    <button type="button" aria-label="后退" disabled={activeBrowserTab.historyIndex === 0} onClick={() => stepBrowserHistory(-1)}><ArrowLeft size={16} /></button>
                     <button type="button" aria-label="前进" disabled={activeBrowserTab.historyIndex >= activeBrowserTab.history.length - 1} onClick={() => stepBrowserHistory(1)}><ArrowRight size={16} /></button>
                     <button type="button" aria-label="刷新" onClick={refreshBrowser}><RotateCw size={15} className={activeBrowserTab.loading ? "spinning" : ""} /></button>
                   </div>
-                  <div className={`browser-address ${activeBrowserTab.loading ? "loading" : ""}`}><Globe2 size={14} /><input value={activeBrowserTab.address} onChange={(event) => updateBrowserAddress(event.target.value)} aria-label="输入网址" placeholder="输入网址或搜索内容" /><button type="submit">前往</button></div>
+                  <div className={`browser-address ${activeBrowserTab.loading ? "loading" : ""}`}><Globe2 size={14} /><input value={activeBrowserTab.address} onChange={(event) => updateBrowserAddress(event.target.value)} aria-label="Safari 风格智能搜索栏" placeholder="搜索或输入网站名称" /><button type="submit">前往</button></div>
                   <button type="button" className={`bookmark-current ${bookmarks.some((bookmark) => bookmark.url === activeBrowserTab.url) ? "saved" : ""}`} aria-label="收藏当前页面" onClick={toggleCurrentBookmark}>{bookmarks.some((bookmark) => bookmark.url === activeBrowserTab.url) ? <BookmarkCheck size={16} /> : <Bookmark size={16} />}</button>
-                  <span className="browser-status">{activeBrowserTab.loading ? "正在连接" : "浏览器"}</span>
+                  <button type="button" className={`browser-toolbar-icon ${downloadsOpen ? "active" : ""}`} aria-label="打开下载项" onClick={() => { setDownloadsOpen(!downloadsOpen); setBookmarksOpen(false); setGroupsOpen(false); setHistoryOpen(false); }}><Download size={15} /></button>
+                  <button type="button" className={`browser-toolbar-icon ${historyOpen ? "active" : ""}`} aria-label="打开浏览历史" onClick={() => { setHistoryOpen(!historyOpen); setBookmarksOpen(false); setGroupsOpen(false); setDownloadsOpen(false); }}><History size={15} /></button>
+                  <span className="browser-status">{activeBrowserTab.loading ? "载入中" : "已就绪"}</span>
                 </form>
+                <div className="browser-content-layout">
+                  {browserSidebarOpen && <aside className="browser-safari-sidebar" aria-label="Safari 风格浏览器侧边栏"><header><span>浏览</span><button aria-label="新建标签页" onClick={() => addBrowserTab()}><Plus size={13} /></button></header><section><small>标签组</small><button className={!activeBrowserTab.groupId ? "active" : ""} onClick={() => assignTabToGroup(undefined)}><Globe2 size={14} /><span>起始页</span><em>{browserTabs.length}</em></button>{browserTabGroups.map((group) => <button className={activeBrowserTab.groupId === group.id ? "active" : ""} key={group.id} onClick={() => assignTabToGroup(group.id)}><i style={{ background: group.color }} /><span>{group.title}</span><em>{groupedTabs(group.id).length}</em></button>)}<button className="sidebar-add-group" onClick={createTabGroup}><Plus size={13} /> 新建标签组</button></section><section><small>收藏夹</small>{bookmarks.slice(0, 6).map((bookmark) => <button key={bookmark.id} onClick={() => openBookmark(bookmark)}><Bookmark size={13} /><span>{bookmark.title}</span></button>)}{!bookmarks.length && <span className="browser-sidebar-empty">点星标收藏当前页面</span>}</section><section className="browser-sidebar-history"><small>最近浏览</small>{browserHistoryEntries.slice(0, 5).map((entry) => <button key={entry.id} onClick={() => navigateBrowser(entry.address.replace(/^search:/, ""))}><History size={13} /><span>{entry.title}</span></button>)}</section></aside>}
                 <div className="browser-frame-wrap" onPointerDownCapture={focusElectronWebview}>
                   {activeBrowserTab.mode === "web" && isElectronDesktop ? createElement("webview", { key: `${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`, ref: (node: HTMLElement | null) => { electronWebviewRef.current = node; }, className: "browser-webview", src: activeBrowserTab.url, partition: "persist:freshdesk-browser", webpreferences: "contextIsolation=yes, sandbox=yes", allowpopups: "true", tabIndex: 0, onFocus: () => bringToFront("browser"), onDomReady: focusElectronWebview }) : null}
                   {activeBrowserTab.mode === "media" ? (
@@ -1940,6 +1907,7 @@ export default function Home() {
                   {recentVideosOpen && <aside className="bookmark-drawer browser-history-drawer"><header><div><Play size={15} /><span>最近播放</span></div><button aria-label="关闭最近播放" onClick={() => setRecentVideosOpen(false)}><X size={14} /></button></header>{recentVideos.length ? <div className="bookmark-list">{recentVideos.map((item) => <button key={item.id} onClick={() => resumeRecentVideo(item)}><Play size={14} /><span><b>{item.title}</b><small>{item.provider} · {item.watchedAt}</small></span></button>)}</div> : <div className="bookmark-empty"><Play size={18} /><span>播放过的视频会出现在这里</span></div>}<footer><button onClick={() => setRecentVideos([])}>清空最近播放</button></footer></aside>}
                   {downloadsOpen && <aside className="bookmark-drawer browser-history-drawer browser-download-drawer"><header><div><Download size={15} /><span>下载项</span></div><button aria-label="关闭下载项" onClick={() => setDownloadsOpen(false)}><X size={14} /></button></header>{browserDownloads.length ? <div className="browser-download-list">{browserDownloads.map((item) => { const progress = item.progress ?? (item.status === "已保存" || item.status === "已完成" ? 100 : 0); const isDownloading = item.status === "下载中" || item.status === "准备就绪"; return <article key={item.id}><button className="browser-download-open" disabled={isDownloading || (item.native && item.status !== "已完成")} onClick={() => { if (!item.native) { setPreviewFilePath(`${VIRTUAL_HOME}/Downloads/${item.title}`); openApp("finder"); } }}><FileText size={14} /><span><b>{item.title}</b><small>{item.createdAt} · {item.status}{item.native && item.path ? " · 系统下载目录" : ""}</small></span></button><div className="browser-download-progress" aria-label={`${item.title} 下载进度`}><i style={{ width: `${progress}%` }} /><small>{isDownloading ? `${progress}%` : item.status}</small></div>{isDownloading && item.native ? <button className="browser-download-cancel" aria-label={`取消下载 ${item.title}`} onClick={() => cancelBrowserDownload(item.id)}><X size={13} /> 取消</button> : null}</article>; })}</div> : <div className="bookmark-empty"><Download size={18} /><span>在兼容阅读或图片查看中保存内容，即可在这里查看进度。</span></div>}<footer><button onClick={() => setBrowserDownloads((items) => items.filter((item) => item.status === "下载中" || item.status === "准备就绪"))}>清除已完成记录</button></footer></aside>}
                   {groupsOpen && <aside className="group-drawer"><header><div><LayoutGrid size={15} /><span>标签页分组</span></div><button aria-label="关闭标签分组" onClick={() => setGroupsOpen(false)}><X size={14} /></button></header><div className="group-drawer-actions"><button onClick={createTabGroup}><Plus size={14} /> 用当前标签新建分组</button><button onClick={() => assignTabToGroup(undefined)} disabled={!activeBrowserTab.groupId}><X size={14} /> 移出当前分组</button></div><div className="group-drawer-list">{browserTabGroups.length ? browserTabGroups.map((group) => <section key={group.id}><div className="group-drawer-row"><i style={{ background: group.color }} /><input value={group.title} aria-label="分组名称" onChange={(event) => renameGroup(group.id, event.target.value)} onBlur={(event) => { if (!event.target.value.trim()) renameGroup(group.id, "未命名分组"); }} /><button aria-label={`将当前标签移入 ${group.title}`} onClick={() => assignTabToGroup(group.id)}><ChevronRight size={13} /></button><button aria-label={`删除 ${group.title}`} onClick={() => removeTabGroup(group.id)}><Trash2 size={12} /></button></div><small>{groupedTabs(group.id).length} 个标签页 · 拖放标签也可加入</small></section>) : <div className="group-empty"><LayoutGrid size={18} /><span>先从当前标签创建一个工作组</span></div>}</div></aside>}
+                </div>
                 </div>
               </div>
             </WindowChrome>
