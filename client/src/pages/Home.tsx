@@ -13,6 +13,7 @@ import { bringWindowToFront, clampRestoredWindowBounds, closeAllWindows, closeWi
 import { recordRecentVideo } from "@/lib/recentVideos";
 import { loadStoredSnapshot } from "@/lib/desktopSnapshot";
 import { createDesktopBackup, desktopBackupFilename, parseDesktopBackup } from "@/lib/desktopBackup";
+import { desktopBrowserOpenMode, desktopSearchUrl, shouldAutoOpenReader } from "@/lib/desktopBrowserMode";
 import {
   Archive,
   ArrowLeft,
@@ -651,7 +652,7 @@ export default function Home() {
   const [mediaZoom, setMediaZoom] = useState(100);
   const [mediaImageError, setMediaImageError] = useState<string | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
-  const [frameStatus, setFrameStatus] = useState<"idle" | "loading" | "loaded" | "restricted">("idle");
+  const [frameStatus, setFrameStatus] = useState<"idle" | "loading" | "loaded" | "restricted" | "error">("idle");
   const [browserFallbackNotice, setBrowserFallbackNotice] = useState("");
   const [desktopUpdateStatus, setDesktopUpdateStatus] = useState(() => window.freshdeskDesktop?.isElectron ? "正在等待更新检查…" : "网页版会随发布即时更新");
   const [desktopBackupStatus, setDesktopBackupStatus] = useState("数据仅保存在当前设备；可随时导出或创建备份。");
@@ -1040,9 +1041,9 @@ export default function Home() {
     const failGuestLoad = (event: Event) => {
       const failure = event as Event & { errorCode?: number; isMainFrame?: boolean };
       if (failure.isMainFrame === false || failure.errorCode === -3) return;
-      setBrowserTabs((tabs) => tabs.map((tab) => tab.id === tabId && tab.mode === "web" ? appendBrowserRoute(tab, { url: tab.url, address: tab.url, title: `阅读：${tab.title}`, mode: "reader" }) : tab));
-      setBrowserFallbackNotice("该网页在桌面 Chromium 视图中未能完成加载，已切换到当前标签的多媒体阅读。不会跳出应用。");
-      setFrameStatus("idle");
+      setBrowserTabs((tabs) => tabs.map((tab) => tab.id === tabId && tab.mode === "web" ? { ...tab, loading: false } : tab));
+      setBrowserFallbackNotice("该网页未能完成加载，但仍保留在当前 Chromium 标签中。你可以刷新、返回或继续输入其他网址；不会自动改成阅读模式。");
+      setFrameStatus("error");
     };
     webview.addEventListener("did-start-loading", startGuestLoad);
     webview.addEventListener("did-finish-load", syncGuestRoute);
@@ -1061,7 +1062,7 @@ export default function Home() {
   }, [activeBrowserTab?.id, activeBrowserTab?.mode, activeBrowserTab?.reloadNonce, activeBrowserTab?.url, isElectronDesktop]);
 
   useEffect(() => {
-    if (!activeBrowserTab || activeBrowserTab.mode !== "web" || frameStatus !== "restricted") return;
+    if (!shouldAutoOpenReader(isElectronDesktop, frameStatus === "restricted") || !activeBrowserTab || activeBrowserTab.mode !== "web") return;
     const tabId = activeBrowserTab.id;
     const timeout = window.setTimeout(() => {
       setBrowserTabs((tabs) => tabs.map((tab) => tab.id === tabId && tab.mode === "web" ? appendBrowserRoute(tab, { url: tab.url, address: tab.url, title: `阅读：${tab.title}`, mode: "reader" }) : tab));
@@ -1069,7 +1070,7 @@ export default function Home() {
       setFrameStatus("idle");
     }, 160);
     return () => window.clearTimeout(timeout);
-  }, [activeBrowserTab?.id, activeBrowserTab?.mode, frameStatus]);
+  }, [activeBrowserTab?.id, activeBrowserTab?.mode, frameStatus, isElectronDesktop]);
 
   useEffect(() => {
     if (isElectronDesktop || !activeBrowserTab || activeBrowserTab.mode !== "web" || !embedInspectionQuery.data || embedInspectionQuery.data.canEmbed) return;
@@ -1258,9 +1259,10 @@ export default function Home() {
   const openWebInCurrentTab = (url: string, title?: string) => {
     const nextUrl = normalizeUrl(url);
     const videoSource = resolveBrowserVideo(nextUrl);
+    const routeMode = desktopBrowserOpenMode(isElectronDesktop, Boolean(videoSource));
     updateActiveBrowserTab((tab) => {
-      const route: BrowserRoute = { url: nextUrl, address: nextUrl, title: title || videoSource?.title || labelFromUrl(nextUrl), mode: videoSource ? "video" : "web", videoSource: videoSource ?? undefined };
-      return { ...appendBrowserRoute(tab, route, videoSource?.kind === "restricted" ? false : true), videoSource: videoSource ?? undefined };
+      const route: BrowserRoute = { url: nextUrl, address: nextUrl, title: title || videoSource?.title || labelFromUrl(nextUrl), mode: routeMode, videoSource: routeMode === "video" ? videoSource ?? undefined : undefined };
+      return { ...appendBrowserRoute(tab, route, routeMode === "video" && videoSource?.kind === "restricted" ? false : true), videoSource: routeMode === "video" ? videoSource ?? undefined : undefined };
     });
     setBrowserFallbackNotice("");
     setReaderLinkFilter("");
@@ -1355,7 +1357,15 @@ export default function Home() {
   };
 
   const navigateBrowser = (value: string) => {
-    if (looksLikeSearch(value)) { void fetchBrowserSearch(value); return; }
+    if (looksLikeSearch(value)) {
+      if (isElectronDesktop) {
+        const query = value.trim();
+        openWebInCurrentTab(desktopSearchUrl(query), `搜索：${query}`);
+        return;
+      }
+      void fetchBrowserSearch(value);
+      return;
+    }
     openWebInCurrentTab(value);
   };
 
@@ -1924,7 +1934,7 @@ export default function Home() {
                     </section>
                   ) : activeBrowserTab.mode === "search" ? (
                     <section className="browser-search-page"><header><span className="eyebrow">Freshdesk Search</span><h2>{activeBrowserTab.searchQuery ? `“${activeBrowserTab.searchQuery}”` : "在这里搜索互联网"}</h2><p>{activeBrowserTab.searchError || activeBrowserTab.searchSummary || "输入关键词，搜索结果会保留在当前浏览器窗口中。"}</p></header>{activeBrowserTab.loading ? <div className="browser-search-loading"><RotateCw className="spinning" size={18} /> 正在检索公开结果…</div> : activeBrowserTab.searchResults?.length ? <div className="browser-search-results">{activeBrowserTab.searchResults.map((result) => <button key={`${result.url}-${result.title}`} onClick={() => openBrowserSearchResult(result)}><span className="browser-result-top"><Globe2 size={14} /> {result.source ?? labelFromUrl(result.url)}</span><strong>{result.title}</strong><p>{result.snippet}</p><small>{labelFromUrl(result.url)} · 在当前标签打开</small></button>)}</div> : <div className="browser-search-empty"><Compass size={28} /><strong>{activeBrowserTab.searchQuery ? "没有找到公开结果" : "等待一个搜索词"}</strong><span>{activeBrowserTab.searchQuery ? "换一个更具体的关键词，或直接输入完整网址继续浏览。" : "可输入“163邮箱登录入口”“OpenAI”或完整网址；结果会在当前标签中继续阅读。"}</span>{!activeBrowserTab.searchQuery && <div className="browser-home-bookmarks"><small><Bookmark size={12} /> 快捷书签</small>{bookmarks.length ? <div>{bookmarks.slice(0, 6).map((bookmark) => <button key={bookmark.id} onClick={() => openBookmark(bookmark)}><Globe2 size={14} /><span><b>{bookmark.title}</b><em>{labelFromUrl(bookmark.url)}</em></span></button>)}</div> : <button className="bookmark-home-empty" onClick={() => setBookmarksOpen(true)}>在工具栏点星标收藏常用网页</button>}</div>}</div>}</section>
-                  ) : <><iframe key={`${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 浏览器内容" src={activeBrowserTab.url} sandbox="allow-forms allow-scripts allow-same-origin" referrerPolicy="strict-origin-when-cross-origin" onLoad={() => { setFrameStatus("loaded"); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} onError={() => autoDegradeWebTab("该网页拒绝在窗口中嵌入，已自动切换到当前标签的多媒体阅读。公开内容与链接仍可继续浏览。")} /><div className={`browser-frame-note ${frameStatus}`}><CircleHelp size={13} /><span>{frameStatus === "loading" ? "正在连接原网页；文字、图片与视频会优先保留在当前标签。若网站阻止嵌入，才会自动切换到多媒体阅读。" : frameStatus === "restricted" ? "该页面长时间未能嵌入，正在切换到当前标签的多媒体阅读。" : embedInspectionQuery.data?.requiresUserConsent ? "该站点要求在自身网页中完成安全确认并设置 Cookie。请在下方网页自行确认；Freshdesk 不会替你同意或绕过这项检查。" : "原网页已加载；页面自己的文字、图片与视频保留在当前标签。若某个站内卡片受跨域限制无法接管，可打开多媒体阅读继续浏览。"}</span><button onClick={() => openInReader(activeBrowserTab.url, `阅读：${activeBrowserTab.title}`)}>多媒体阅读</button></div></>}
+                  ) : <><iframe key={`${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 浏览器内容" src={activeBrowserTab.url} sandbox="allow-forms allow-scripts allow-same-origin" referrerPolicy="strict-origin-when-cross-origin" onLoad={() => { setFrameStatus("loaded"); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} onError={() => autoDegradeWebTab("该网页拒绝在窗口中嵌入，已自动切换到当前标签的多媒体阅读。公开内容与链接仍可继续浏览。")} /><div className={`browser-frame-note ${frameStatus}`}><CircleHelp size={13} /><span>{frameStatus === "loading" ? "正在连接原网页；文字、图片与视频会优先保留在当前标签。若网站阻止嵌入，才会自动切换到多媒体阅读。" : frameStatus === "restricted" ? "该页面长时间未能嵌入，正在切换到当前标签的多媒体阅读。" : frameStatus === "error" ? "网页仍保留在当前标签。你可以刷新、返回或继续输入其他网址；不会自动切换阅读模式。" : embedInspectionQuery.data?.requiresUserConsent ? "该站点要求在自身网页中完成安全确认并设置 Cookie。请在下方网页自行确认；Freshdesk 不会替你同意或绕过这项检查。" : "原网页已加载；页面自己的文字、图片与视频保留在当前标签。若某个站内卡片受跨域限制无法接管，可打开多媒体阅读继续浏览。"}</span><button onClick={() => openInReader(activeBrowserTab.url, `阅读：${activeBrowserTab.title}`)}>多媒体阅读</button></div></>}
                   {bookmarksOpen && <aside className="bookmark-drawer"><header><div><Bookmark size={15} /><span>收藏夹</span></div><button aria-label="关闭收藏夹" onClick={() => setBookmarksOpen(false)}><X size={14} /></button></header>{bookmarks.length ? <div className="bookmark-list">{bookmarks.map((bookmark) => <button key={bookmark.id} onClick={() => openBookmark(bookmark)}><Globe2 size={14} /><span><b>{bookmark.title}</b><small>{labelFromUrl(bookmark.url)}</small></span></button>)}</div> : <div className="bookmark-empty"><Bookmark size={18} /><span>还没有收藏的页面</span></div>}</aside>}
                   {historyOpen && <aside className="bookmark-drawer browser-history-drawer"><header><div><History size={15} /><span>浏览历史</span></div><button aria-label="关闭浏览历史" onClick={() => setHistoryOpen(false)}><X size={14} /></button></header>{browserHistoryEntries.length ? <div className="bookmark-list">{browserHistoryEntries.map((entry) => <button key={entry.id} onClick={() => entry.mode === "search" ? void fetchBrowserSearch(entry.address.replace(/^search:/, "")) : entry.mode === "reader" ? openInReader(entry.address, entry.title) : navigateBrowser(entry.address)}><History size={14} /><span><b>{entry.title}</b><small>{entry.visitedAt} · {labelFromUrl(entry.address.replace(/^search:/, ""))}</small></span></button>)}</div> : <div className="bookmark-empty"><History size={18} /><span>还没有浏览记录</span></div>}<footer><button onClick={() => setBrowserHistoryEntries([])}>清除历史记录</button></footer></aside>}
                   {recentVideosOpen && <aside className="bookmark-drawer browser-history-drawer"><header><div><Play size={15} /><span>最近播放</span></div><button aria-label="关闭最近播放" onClick={() => setRecentVideosOpen(false)}><X size={14} /></button></header>{recentVideos.length ? <div className="bookmark-list">{recentVideos.map((item) => <button key={item.id} onClick={() => resumeRecentVideo(item)}><Play size={14} /><span><b>{item.title}</b><small>{item.provider} · {item.watchedAt}</small></span></button>)}</div> : <div className="bookmark-empty"><Play size={18} /><span>播放过的视频会出现在这里</span></div>}<footer><button onClick={() => setRecentVideos([])}>清空最近播放</button></footer></aside>}
