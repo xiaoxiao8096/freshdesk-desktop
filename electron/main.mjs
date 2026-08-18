@@ -199,7 +199,7 @@ async function createWindow() {
     guestPreferences.nodeIntegration = false;
     guestPreferences.contextIsolation = true;
     guestPreferences.sandbox = true;
-    guestParams.allowpopups = "false";
+    guestParams.allowpopups = "true";
   });
   mainWindow.webContents.on("did-attach-webview", (_event, contents) => wireGuestNavigation(contents));
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

@@ -20,4 +20,10 @@ describe("Electron 主进程依赖加载", () => {
     expect(mainProcessSource).toContain("function validateDownloadRequest(request)");
     expect(mainProcessSource).toContain("function validateBackupPayload(payload)");
   });
+
+  it("将网站的新窗口请求限制在当前 Chromium 网页视图内，而不阻断站内确认后的跳转", () => {
+    expect(mainProcessSource).toContain('guestParams.allowpopups = "true";');
+    expect(mainProcessSource).toContain("contents.setWindowOpenHandler(({ url }) => {");
+    expect(mainProcessSource).toContain("contents.loadURL(url).catch(() => undefined);");
+  });
 });
