@@ -53,6 +53,10 @@ export function evaluateEmbedPolicy(xFrameOptions: string | null, contentSecurit
   return { canEmbed: true, reason: "未检测到阻止嵌入的响应头。" };
 }
 
+export function detectEmbedConsentGate(html: string) {
+  return /(?:site_agreed|安全环境检测|安全确认|(?:src|href)=["'][^"']*(?:guard|verify|security)[^"']*\.(?:js|php))/i.test(html);
+}
+
 function absoluteUrl(href: string, baseUrl: string) {
   try {
     const url = new URL(href, baseUrl);
@@ -217,8 +221,9 @@ async function inspectEmbedPolicy(url: string) {
       },
     });
     const policy = evaluateEmbedPolicy(response.headers.get("x-frame-options"), response.headers.get("content-security-policy"));
-    void response.body?.cancel();
-    return { ...policy, url: response.url };
+    const contentType = response.headers.get("content-type") ?? "";
+    const html = /text\/html|application\/xhtml\+xml/i.test(contentType) ? await response.text() : "";
+    return { ...policy, url: response.url, requiresUserConsent: detectEmbedConsentGate(html) };
   } finally {
     clearTimeout(timeout);
   }
@@ -239,7 +244,7 @@ export const browserRouter = router({
     try {
       return await inspectEmbedPolicy(parsed.toString());
     } catch {
-      return { canEmbed: true, reason: "暂时无法预检嵌入策略，将继续尝试在当前标签加载。", url: parsed.toString() };
+      return { canEmbed: true, reason: "暂时无法预检嵌入策略，将继续尝试在当前标签加载。", url: parsed.toString(), requiresUserConsent: false };
     }
   }),
   readPage: publicProcedure.input(browserInput).query(async ({ input }) => {

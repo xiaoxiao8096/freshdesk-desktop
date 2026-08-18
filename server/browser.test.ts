@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { enrichBilibiliVideoTitles, evaluateEmbedPolicy, extractReaderBody, extractReaderImages, extractReaderLinks, extractReaderVideos, safeBrowserUrl } from "./routers/browser";
+import { detectEmbedConsentGate, enrichBilibiliVideoTitles, evaluateEmbedPolicy, extractReaderBody, extractReaderImages, extractReaderLinks, extractReaderVideos, safeBrowserUrl } from "./routers/browser";
 
 describe("browser reader helpers", () => {
   it("rejects local and non-web URLs", () => {
@@ -13,6 +13,12 @@ describe("browser reader helpers", () => {
     expect(evaluateEmbedPolicy("SAMEORIGIN", null)).toMatchObject({ canEmbed: false, reason: expect.stringContaining("自身域名") });
     expect(evaluateEmbedPolicy(null, "default-src 'self'; frame-ancestors 'none'")).toMatchObject({ canEmbed: false, reason: expect.stringContaining("内容安全策略") });
     expect(evaluateEmbedPolicy(null, "frame-ancestors https:")).toMatchObject({ canEmbed: true });
+  });
+
+  it("detects website-controlled confirmation gates without treating them as an embeddable content error", () => {
+    expect(detectEmbedConsentGate('<script src="/guard.js"></script>')).toBe(true);
+    expect(detectEmbedConsentGate('<script>document.cookie = "site_agreed=1"</script>')).toBe(true);
+    expect(detectEmbedConsentGate('<main><h1>普通公开文章</h1></main>')).toBe(false);
   });
 
   it("extracts unique absolute HTTP links from readable markup", () => {
