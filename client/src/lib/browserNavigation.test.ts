@@ -59,4 +59,24 @@ describe("appendNavigationRoute", () => {
       loading: false,
     });
   });
+
+  it("synchronizes the Electron guest page, address bar and history index after a native forward step", () => {
+    const history = [
+      { url: "https://example.com/one", title: "第一页", mode: "web" as const },
+      { url: "https://example.com/two", title: "第二页", mode: "web" as const },
+      { url: "https://example.com/three", title: "第三页", mode: "web" as const },
+    ];
+    const tab = { id: "tab-a", url: history[1].url, address: history[1].url, title: history[1].title, loading: true, history, historyIndex: 1, mode: "web" as const };
+    const step = getNavigationStep(history, tab.historyIndex, 1);
+    const guestStep = { tabId: tab.id, ...step! };
+
+    expect(guestStep).toMatchObject({ tabId: "tab-a", index: 2, route: { url: history[2].url } });
+    expect(synchronizeGuestHistoryStep(tab, guestStep, history[2].url, "第三页 · 站点标题")).toMatchObject({
+      url: history[2].url,
+      address: history[2].url,
+      title: "第三页 · 站点标题",
+      historyIndex: 2,
+      loading: false,
+    });
+  });
 });
