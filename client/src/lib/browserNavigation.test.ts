@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendNavigationRoute } from "./browserNavigation";
+import { appendNavigationRoute, getNavigationStep, synchronizeGuestHistoryStep } from "./browserNavigation";
 
 describe("appendNavigationRoute", () => {
   it("keeps a reader route before a same-address direct attempt so back returns to the article", () => {
@@ -32,5 +32,31 @@ describe("appendNavigationRoute", () => {
     const route = { url: "https://example.com/live.m3u8", mode: "video" as const, sourceKind: "hls" };
     const result = appendNavigationRoute([], -1, route);
     expect(result.history[0]).toEqual(route);
+  });
+
+  it("returns the exact route index used to synchronize Electron guest back and forward navigation", () => {
+    const history = [
+      { url: "https://example.com/one", mode: "web" as const },
+      { url: "https://example.com/two", mode: "web" as const },
+      { url: "https://example.com/three", mode: "web" as const },
+    ];
+    expect(getNavigationStep(history, 1, -1)).toMatchObject({ index: 0, route: { url: "https://example.com/one" } });
+    expect(getNavigationStep(history, 1, 1)).toMatchObject({ index: 2, route: { url: "https://example.com/three" } });
+    expect(getNavigationStep(history, 0, -1)).toBeNull();
+  });
+
+  it("synchronizes the Electron guest page, address bar and history index after a native back step", () => {
+    const history = [
+      { url: "https://example.com/one", title: "第一页", mode: "web" as const },
+      { url: "https://example.com/two", title: "第二页", mode: "web" as const },
+    ];
+    const tab = { id: "tab-a", url: history[1].url, address: history[1].url, title: history[1].title, loading: true, history, historyIndex: 1, mode: "web" as const };
+    expect(synchronizeGuestHistoryStep(tab, { tabId: "tab-a", index: 0 }, history[0].url, "第一页 · 站点标题")).toMatchObject({
+      url: history[0].url,
+      address: history[0].url,
+      title: "第一页 · 站点标题",
+      historyIndex: 0,
+      loading: false,
+    });
   });
 });

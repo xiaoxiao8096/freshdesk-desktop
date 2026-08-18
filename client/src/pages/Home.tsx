@@ -4,7 +4,7 @@
 import { createElement, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
 import { searchVirtualFiles } from "@/lib/finderSearch";
-import { appendNavigationRoute } from "@/lib/browserNavigation";
+import { appendNavigationRoute, getNavigationStep, synchronizeGuestHistoryStep } from "@/lib/browserNavigation";
 import { resolveBrowserVideo, type BrowserVideoSource } from "@/lib/browserVideo";
 import { postTikTokPlayerCommand, type TikTokPlayerCommand } from "@/lib/tiktokPlayer";
 import { HlsVideoPlayer } from "@/components/HlsVideoPlayer";
@@ -279,15 +279,15 @@ type DesktopSnapshot = Partial<{
 
 type FinderContextMenu = { path: string; x: number; y: number };
 
-const WALLPAPER = "/manus-storage/freshdesk-aurora-wallpaper_a64c0088.jpg";
-const ALBUM_ORBIT = "/manus-storage/freshdesk-album-orbit_68ca7295.jpg";
-const ALBUM_TIDE = "/manus-storage/freshdesk-album-tide_658b722a.jpg";
-const BRAND_MARK = "/manus-storage/freshdesk-four-dot-mark_fa52f231.png";
-const MUSIC = "/manus-storage/freshdesk-idle-sequence_94201983.mp3";
-const MUSIC_MORNING = "/manus-storage/freshdesk-morning-window_47548bd8.mp3";
-const MUSIC_NIGHT = "/manus-storage/freshdesk-night-orbit_b6af35f3.mp3";
-const WALLPAPER_SOLAR = "/manus-storage/freshdesk-wallpaper-solar-drift_00688618.jpg";
-const WALLPAPER_ALPINE = "/manus-storage/freshdesk-wallpaper-alpine-cloud_56c37133.jpg";
+const WALLPAPER = "https://files.manuscdn.com/user_upload_by_module/session_file/310519663889058694/CSGmuRUTIunwHfCs.jpg";
+const ALBUM_ORBIT = "https://files.manuscdn.com/user_upload_by_module/session_file/310519663889058694/bBpyNynCyFdirmaS.jpg";
+const ALBUM_TIDE = "https://files.manuscdn.com/user_upload_by_module/session_file/310519663889058694/ZktgRbuptPkxDeyE.jpg";
+const BRAND_MARK = "https://files.manuscdn.com/user_upload_by_module/session_file/310519663889058694/jzobKtTVWfvcCDnT.png";
+const MUSIC = "https://files.manuscdn.com/user_upload_by_module/session_file/310519663889058694/isgCvGDbyPDBkAbk.mp3";
+const MUSIC_MORNING = "https://files.manuscdn.com/user_upload_by_module/session_file/310519663889058694/gyXFNqZPUTWhFjbH.mp3";
+const MUSIC_NIGHT = "https://files.manuscdn.com/user_upload_by_module/session_file/310519663889058694/PXVhiQTEYAYLaCFp.mp3";
+const WALLPAPER_SOLAR = "https://files.manuscdn.com/user_upload_by_module/session_file/310519663889058694/kNekPbkXRhycmlRX.jpg";
+const WALLPAPER_ALPINE = "https://files.manuscdn.com/user_upload_by_module/session_file/310519663889058694/HSiMpecJevoxAyVb.jpg";
 
 const wallpapers: WallpaperItem[] = [
   { id: "aurora", title: "晨雾极光", src: WALLPAPER },
@@ -647,6 +647,7 @@ export default function Home() {
   const [videoError, setVideoError] = useState<string | null>(null);
   const [frameStatus, setFrameStatus] = useState<"idle" | "loading" | "loaded" | "restricted">("idle");
   const [browserFallbackNotice, setBrowserFallbackNotice] = useState("");
+  const [desktopUpdateStatus, setDesktopUpdateStatus] = useState(() => window.freshdeskDesktop?.isElectron ? "正在等待更新检查…" : "网页版会随发布即时更新");
   const [readerLinkFilter, setReaderLinkFilter] = useState("");
   const [browserHistoryEntries, setBrowserHistoryEntries] = useState<BrowserHistoryEntry[]>(() => restoredDesktopState?.browserHistoryEntries ?? []);
   const [browserDownloads, setBrowserDownloads] = useState<BrowserDownload[]>(() => restoredDesktopState?.browserDownloads ?? []);
@@ -690,6 +691,7 @@ export default function Home() {
   const nativeVideoRef = useRef<HTMLVideoElement | null>(null);
   const tiktokPlayerRef = useRef<HTMLIFrameElement | null>(null);
   const electronWebviewRef = useRef<HTMLElement | null>(null);
+  const electronHistoryStepRef = useRef<{ tabId: string; index: number } | null>(null);
   const desktopSnapshotRef = useRef<DesktopSnapshot | null>(restoredDesktopState);
   const isElectronDesktop = typeof window !== "undefined" && window.freshdeskDesktop?.isElectron === true;
 
@@ -989,13 +991,14 @@ export default function Home() {
   useEffect(() => {
     if (!activeBrowserTab || activeBrowserTab.mode !== "web") { setFrameStatus("idle"); return; }
     setFrameStatus("loading");
-    const timeout = window.setTimeout(() => setFrameStatus((status) => status === "loading" ? "restricted" : status), isElectronDesktop ? 12_000 : 6_500);
+    if (isElectronDesktop) return;
+    const timeout = window.setTimeout(() => setFrameStatus((status) => status === "loading" ? "restricted" : status), 6_500);
     return () => window.clearTimeout(timeout);
   }, [activeBrowserTab?.id, activeBrowserTab?.mode, activeBrowserTab?.reloadNonce, activeBrowserTab?.url, isElectronDesktop]);
 
   useEffect(() => {
     if (!isElectronDesktop || !activeBrowserTab || activeBrowserTab.mode !== "web") return;
-    const webview = electronWebviewRef.current as (HTMLElement & { getURL?: () => string; getTitle?: () => string }) | null;
+    const webview = electronWebviewRef.current as (HTMLElement & { getURL?: () => string; getTitle?: () => string; reloadIgnoringCache?: () => void }) | null;
     if (!webview) return;
     const tabId = activeBrowserTab.id;
     const syncGuestRoute = () => {
@@ -1004,6 +1007,11 @@ export default function Home() {
       const title = webview.getTitle?.() || labelFromUrl(url);
       setBrowserTabs((tabs) => tabs.map((tab) => {
         if (tab.id !== tabId || tab.mode !== "web") return tab;
+        const pendingHistoryStep = electronHistoryStepRef.current;
+        if (pendingHistoryStep?.tabId === tabId) {
+          electronHistoryStepRef.current = null;
+          return synchronizeGuestHistoryStep(tab, pendingHistoryStep, url, title) ?? { ...tab, title, address: url, loading: false };
+        }
         if (tab.url === url) return { ...tab, title, address: url, loading: false };
         return appendBrowserRoute(tab, { url, address: url, title, mode: "web" }, false);
       }));
@@ -1014,11 +1022,18 @@ export default function Home() {
       if (!title) return;
       setBrowserTabs((tabs) => tabs.map((tab) => tab.id === tabId && tab.mode === "web" ? { ...tab, title } : tab));
     };
-    const failGuestLoad = () => {
+    const startGuestLoad = () => {
+      setBrowserTabs((tabs) => tabs.map((tab) => tab.id === tabId && tab.mode === "web" ? { ...tab, loading: true } : tab));
+      setFrameStatus("loading");
+    };
+    const failGuestLoad = (event: Event) => {
+      const failure = event as Event & { errorCode?: number; isMainFrame?: boolean };
+      if (failure.isMainFrame === false || failure.errorCode === -3) return;
       setBrowserTabs((tabs) => tabs.map((tab) => tab.id === tabId && tab.mode === "web" ? appendBrowserRoute(tab, { url: tab.url, address: tab.url, title: `阅读：${tab.title}`, mode: "reader" }) : tab));
       setBrowserFallbackNotice("该网页在桌面 Chromium 视图中未能完成加载，已切换到当前标签的多媒体阅读。不会跳出应用。");
       setFrameStatus("idle");
     };
+    webview.addEventListener("did-start-loading", startGuestLoad);
     webview.addEventListener("did-finish-load", syncGuestRoute);
     webview.addEventListener("did-navigate", syncGuestRoute);
     webview.addEventListener("did-navigate-in-page", syncGuestRoute);
@@ -1029,6 +1044,7 @@ export default function Home() {
       webview.removeEventListener("did-navigate", syncGuestRoute);
       webview.removeEventListener("did-navigate-in-page", syncGuestRoute);
       webview.removeEventListener("page-title-updated", syncGuestTitle);
+      webview.removeEventListener("did-start-loading", startGuestLoad);
       webview.removeEventListener("did-fail-load", failGuestLoad);
     };
   }, [activeBrowserTab?.id, activeBrowserTab?.mode, activeBrowserTab?.reloadNonce, activeBrowserTab?.url, isElectronDesktop]);
@@ -1045,9 +1061,14 @@ export default function Home() {
   }, [activeBrowserTab?.id, activeBrowserTab?.mode, frameStatus]);
 
   useEffect(() => {
-    if (!activeBrowserTab || activeBrowserTab.mode !== "web" || !embedInspectionQuery.data || embedInspectionQuery.data.canEmbed) return;
+    if (isElectronDesktop || !activeBrowserTab || activeBrowserTab.mode !== "web" || !embedInspectionQuery.data || embedInspectionQuery.data.canEmbed) return;
     autoDegradeWebTab(`${embedInspectionQuery.data.reason} 已自动切换到当前标签的兼容阅读；不会跳转外部浏览器。`);
-  }, [activeBrowserTab?.id, activeBrowserTab?.mode, embedInspectionQuery.data?.canEmbed, embedInspectionQuery.data?.reason]);
+  }, [activeBrowserTab?.id, activeBrowserTab?.mode, embedInspectionQuery.data?.canEmbed, embedInspectionQuery.data?.reason, isElectronDesktop]);
+
+  useEffect(() => {
+    if (!isElectronDesktop || !window.freshdeskDesktop?.onUpdateStatus) return;
+    return window.freshdeskDesktop.onUpdateStatus((status) => setDesktopUpdateStatus(status.message));
+  }, [isElectronDesktop]);
 
   const bringToFront = (id: AppName) => {
     setActiveWindowId(id);
@@ -1338,11 +1359,22 @@ export default function Home() {
   };
 
   const stepBrowserHistory = (direction: -1 | 1) => {
+    if (isElectronDesktop && activeBrowserTab?.mode === "web") {
+      const next = getNavigationStep(activeBrowserTab.history, activeBrowserTab.historyIndex, direction);
+      const webview = electronWebviewRef.current as (HTMLElement & { canGoBack?: () => boolean; canGoForward?: () => boolean; goBack?: () => void; goForward?: () => void }) | null;
+      const canUseGuestHistory = next?.route.mode === "web" && (direction === -1 ? webview?.canGoBack?.() : webview?.canGoForward?.());
+      if (next && canUseGuestHistory) {
+        electronHistoryStepRef.current = { tabId: activeBrowserTab.id, index: next.index };
+        updateActiveBrowserTab((tab) => ({ ...tab, loading: true }));
+        if (direction === -1) webview?.goBack?.(); else webview?.goForward?.();
+        return;
+      }
+    }
     updateActiveBrowserTab((tab) => {
-      const nextIndex = tab.historyIndex + direction;
-      if (nextIndex < 0 || nextIndex >= tab.history.length) return tab;
-      const route = tab.history[nextIndex];
-      return { ...tab, title: route.title || labelFromUrl(route.url), address: route.address ?? route.url, url: route.url, historyIndex: nextIndex, loading: route.videoSource?.kind === "restricted" ? false : true, mode: route.mode, videoSource: route.videoSource, searchError: "" };
+      const next = getNavigationStep(tab.history, tab.historyIndex, direction);
+      if (!next) return tab;
+      const { route, index } = next;
+      return { ...tab, title: route.title || labelFromUrl(route.url), address: route.address ?? route.url, url: route.url, historyIndex: index, loading: route.videoSource?.kind === "restricted" ? false : true, mode: route.mode, videoSource: route.videoSource, searchError: "" };
     });
   };
 
@@ -1354,6 +1386,14 @@ export default function Home() {
       updateActiveBrowserTab((tab) => ({ ...tab, loading: true }));
       void readerQuery.refetch();
       return;
+    }
+    if (isElectronDesktop) {
+      const webview = electronWebviewRef.current as (HTMLElement & { reloadIgnoringCache?: () => void }) | null;
+      if (webview?.reloadIgnoringCache) {
+        updateActiveBrowserTab((tab) => ({ ...tab, loading: true }));
+        webview.reloadIgnoringCache();
+        return;
+      }
     }
     updateActiveBrowserTab((tab) => ({ ...tab, loading: true, reloadNonce: tab.reloadNonce + 1 }));
   };
@@ -1712,7 +1752,7 @@ export default function Home() {
 
           {windowItem.id === "settings" && (
             <WindowChrome title="设置" appWindow={windowItem} onClose={() => closeApp("settings")} onMinimize={() => minimizeApp("settings")} onFocus={() => bringToFront("settings")} onMaximize={() => toggleMaximize("settings")} onBoundsChange={(bounds) => updateWindowBounds("settings", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("settings", side)} className="settings-window">
-              <div className="settings-body"><aside className="settings-sidebar"><div className="settings-profile"><img src={BRAND_MARK} alt="" /><div><strong>你的工作空间</strong><span>本机帐户</span></div></div><button className="settings-active"><Wifi size={16} /> Wi‑Fi</button><button><Bluetooth size={16} /> 蓝牙</button><button><Moon size={16} /> 专注模式</button><button><Gauge size={16} /> 桌面与外观</button></aside><section className="settings-content"><header><h2>桌面与外观</h2><p>按照此刻的光线调整你的工作空间。</p></header><div className="setting-block"><div><strong>外观</strong><span>让系统界面与壁纸保持平衡。</span></div><div className="appearance-choice"><button className={systemAppearance === "light" ? "chosen" : ""} onClick={() => setSystemAppearance("light")}><span className="light-preview" />浅色</button><button className={systemAppearance === "dark" ? "chosen" : ""} onClick={() => setSystemAppearance("dark")}><span className="dark-preview" />深色</button></div></div><div className="setting-block wallpaper-block"><div><strong><Palette size={13} /> 桌面壁纸</strong><span>选择一张原创背景，立即应用到桌面。</span></div><div className="wallpaper-options">{wallpapers.map((wallpaper) => <button key={wallpaper.id} className={activeWallpaperId === wallpaper.id ? "selected" : ""} onClick={() => setActiveWallpaperId(wallpaper.id)}><img src={wallpaper.src} alt="" /><span>{wallpaper.title}</span></button>)}</div></div><div className="setting-block"><div><strong>新手引导</strong><span>重新查看欢迎界面和桌面提示。</span></div><button className="soft-action" onClick={() => { setSetupComplete(false); setShowSetupChoice(false); }}>再次打开</button></div><div className="setting-block"><div><strong>音量</strong><span>当前输出：内建扬声器</span></div><input aria-label="系统音量" type="range" min={0} max={100} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></div></section></div>
+              <div className="settings-body"><aside className="settings-sidebar"><div className="settings-profile"><img src={BRAND_MARK} alt="" /><div><strong>你的工作空间</strong><span>本机帐户</span></div></div><button className="settings-active"><Wifi size={16} /> Wi‑Fi</button><button><Bluetooth size={16} /> 蓝牙</button><button><Moon size={16} /> 专注模式</button><button><Gauge size={16} /> 桌面与外观</button></aside><section className="settings-content"><header><h2>桌面与外观</h2><p>按照此刻的光线调整你的工作空间。</p></header><div className="setting-block"><div><strong>外观</strong><span>让系统界面与壁纸保持平衡。</span></div><div className="appearance-choice"><button className={systemAppearance === "light" ? "chosen" : ""} onClick={() => setSystemAppearance("light")}><span className="light-preview" />浅色</button><button className={systemAppearance === "dark" ? "chosen" : ""} onClick={() => setSystemAppearance("dark")}><span className="dark-preview" />深色</button></div></div><div className="setting-block wallpaper-block"><div><strong><Palette size={13} /> 桌面壁纸</strong><span>选择一张原创背景，立即应用到桌面。</span></div><div className="wallpaper-options">{wallpapers.map((wallpaper) => <button key={wallpaper.id} className={activeWallpaperId === wallpaper.id ? "selected" : ""} onClick={() => setActiveWallpaperId(wallpaper.id)}><img src={wallpaper.src} alt="" /><span>{wallpaper.title}</span></button>)}</div></div><div className="setting-block"><div><strong>应用更新</strong><span>{desktopUpdateStatus}</span></div><button className="soft-action" disabled={!isElectronDesktop} onClick={() => void window.freshdeskDesktop?.checkForUpdates()}>检查更新</button></div><div className="setting-block"><div><strong>新手引导</strong><span>重新查看欢迎界面和桌面提示。</span></div><button className="soft-action" onClick={() => { setSetupComplete(false); setShowSetupChoice(false); }}>再次打开</button></div><div className="setting-block"><div><strong>音量</strong><span>当前输出：内建扬声器</span></div><input aria-label="系统音量" type="range" min={0} max={100} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></div></section></div>
             </WindowChrome>
           )}
 

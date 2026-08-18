@@ -1,4 +1,5 @@
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { autoUpdater } from "electron-updater";
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
@@ -7,6 +8,36 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow = null;
 let serverProcess = null;
+
+function sendUpdateStatus(status) {
+  mainWindow?.webContents.send("freshdesk:update-status", status);
+}
+
+function configureAutoUpdates() {
+  if (!app.isPackaged) return;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on("checking-for-update", () => sendUpdateStatus({ state: "checking", message: "正在检查更新…" }));
+  autoUpdater.on("update-not-available", () => sendUpdateStatus({ state: "current", message: "已经是最新版本" }));
+  autoUpdater.on("download-progress", (progress) => sendUpdateStatus({ state: "downloading", message: `正在下载更新 ${Math.round(progress.percent)}%` }));
+  autoUpdater.on("update-downloaded", async () => {
+    sendUpdateStatus({ state: "ready", message: "更新已下载，重启应用即可完成升级" });
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: "info",
+      buttons: ["立即重启升级", "稍后"],
+      defaultId: 0,
+      cancelId: 1,
+      title: "Freshdesk Desktop 更新已就绪",
+      message: "新版本已下载完成。重启后将自动完成安装。",
+    });
+    if (response === 0) autoUpdater.quitAndInstall();
+  });
+  autoUpdater.on("error", (error) => {
+    startupLog(`Auto update error: ${error.message}`);
+    sendUpdateStatus({ state: "error", message: "暂时无法检查更新，请稍后再试。" });
+  });
+  setTimeout(() => void autoUpdater.checkForUpdates(), 3_500);
+}
 
 function startupLog(message) {
   try {
@@ -42,7 +73,7 @@ function startEmbeddedServer() {
     const timeout = setTimeout(() => fail(new Error("Freshdesk 本地服务启动超时。")), 15_000);
     const { NODE_OPTIONS: _nodeOptions, ELECTRON_RUN_AS_NODE: _runAsNode, ...inheritedEnvironment } = process.env;
     serverProcess = spawn(process.execPath, [serverEntry], {
-      env: { ...inheritedEnvironment, ELECTRON_RUN_AS_NODE: "1", NODE_ENV: "production", PORT: port },
+      env: { ...inheritedEnvironment, ELECTRON_RUN_AS_NODE: "1", NODE_ENV: "production", PORT: port, FRESHDESK_FONT_DIR: path.join(process.resourcesPath, "fonts") },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -118,7 +149,13 @@ async function createWindow() {
   });
   mainWindow.once("ready-to-show", () => mainWindow?.show());
   await mainWindow.loadURL(startUrl);
+  configureAutoUpdates();
 }
+
+ipcMain.handle("freshdesk:check-for-updates", () => app.isPackaged ? autoUpdater.checkForUpdates() : null);
+ipcMain.handle("freshdesk:install-update", () => {
+  if (app.isPackaged) autoUpdater.quitAndInstall();
+});
 
 app.whenReady().then(createWindow).catch((error) => {
   console.error(error);

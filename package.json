@@ -1,6 +1,6 @@
 {
   "name": "freshdesk-mac-experience",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "main": "electron/main.mjs",
   "license": "MIT",
@@ -13,7 +13,8 @@
     "test": "vitest run",
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
     "electron:dev": "ELECTRON_START_URL=http://localhost:3000 electron .",
-    "electron:pack": "rm -rf release dist/win-unpacked && rm -f dist/Freshdesk-Desktop-${npm_package_version}-win-x64-portable.zip && pnpm build && electron-builder --win dir --x64 --publish never && cd release && zip -r -1 ../dist/Freshdesk-Desktop-${npm_package_version}-win-x64-portable.zip win-unpacked"
+    "electron:pack": "rm -rf release dist/win-unpacked && rm -f dist/Freshdesk-Desktop-${npm_package_version}-win-x64-portable.zip && pnpm build && electron-builder --win dir --x64 --publish never && cd release && zip -r -1 ../dist/Freshdesk-Desktop-${npm_package_version}-win-x64-portable.zip win-unpacked",
+    "electron:release": "pnpm build && electron-builder --win nsis --x64 --publish always"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.693.0",
@@ -57,6 +58,7 @@
     "date-fns": "^4.1.0",
     "dotenv": "^17.2.2",
     "drizzle-orm": "^0.44.5",
+    "electron-updater": "^6.8.9",
     "embla-carousel-react": "^8.6.0",
     "express": "^4.21.2",
     "framer-motion": "^12.23.22",
@@ -122,6 +124,19 @@
     "directories": {
       "output": "release"
     },
+    "extraResources": [
+      {
+        "from": "../webdev-static-assets/freshdesk-desktop/fonts",
+        "to": "fonts"
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "xiaoxiao8096",
+        "repo": "freshdesk-desktop"
+      }
+    ],
     "extraMetadata": {
       "main": "electron/main.mjs"
     },

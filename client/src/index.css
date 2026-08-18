@@ -3,10 +3,18 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+@font-face { font-family: "Freshdesk Manrope"; src: url("/freshdesk-fonts/font-3.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Freshdesk Manrope"; src: url("/freshdesk-fonts/font-4.ttf") format("truetype"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "Freshdesk Manrope"; src: url("/freshdesk-fonts/font-5.ttf") format("truetype"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "Freshdesk Manrope"; src: url("/freshdesk-fonts/font-6.ttf") format("truetype"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "Freshdesk Manrope"; src: url("/freshdesk-fonts/font-7.ttf") format("truetype"); font-weight: 800; font-display: swap; }
+@font-face { font-family: "Freshdesk Mono"; src: url("/freshdesk-fonts/font-1.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Freshdesk Mono"; src: url("/freshdesk-fonts/font-2.ttf") format("truetype"); font-weight: 500; font-display: swap; }
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-sans: "Manrope", Arial, sans-serif;
+  --font-sans: "Freshdesk Manrope", "Manrope", "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-border: var(--border);
@@ -17,7 +25,7 @@
 :root { --background: #f4f5f8; --foreground: #10131a; --border: rgba(255,255,255,.35); --ring: #6fa8ff; }
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; min-width: 100%; height: 100%; margin: 0; overflow: hidden; }
-body { font-family: "Manrope", Arial, sans-serif; background: #10131a; color: #fff; }
+body { font-family: "Freshdesk Manrope", "Manrope", "Segoe UI Variable", "Segoe UI", Arial, sans-serif; background: #10131a; color: #fff; }
 button, input, textarea { font: inherit; }
 button { border: 0; padding: 0; color: inherit; background: none; cursor: pointer; }
 button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid #97c1ff; outline-offset: 3px; }
@@ -35,14 +43,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .menu-word { min-height: 23px; padding: 0 7px; border-radius: 6px; font-size: 12px; font-weight: 500; }
 .menu-word.active { font-weight: 700; }
 .status-icon { width: 26px; height: 24px; display: grid; place-items: center; border-radius: 6px; }
-.time-button { min-height: 24px; padding: 0 6px; border-radius: 6px; font-size: 11px; font-family: "DM Mono", monospace; }
+.time-button { min-height: 24px; padding: 0 6px; border-radius: 6px; font-size: 11px; font-family: "Freshdesk Mono", "DM Mono", "Cascadia Mono", Consolas, monospace; }
 
 .desktop-main { position: absolute; inset: 30px 0 0; }
 .desktop-greeting { position: absolute; left: clamp(38px, 7vw, 116px); top: clamp(76px, 16vh, 170px); max-width: 530px; animation: rise-in .75s cubic-bezier(.23,1,.32,1) both .25s; }
 .greeting-orbit { display: flex; align-items: center; gap: 5px; height: 16px; margin-bottom: 17px; }
 .greeting-orbit span { width: 6px; height: 6px; border-radius: 999px; background: #dce9ff; box-shadow: 0 0 14px rgba(181,211,255,.8); }
 .greeting-orbit span:nth-child(2) { width: 10px; height: 10px; background: #83b3ff; }.greeting-orbit span:nth-child(3) { width: 7px; height: 7px; background: #ff8e98; }.greeting-orbit span:nth-child(4) { width: 4px; height: 4px; background: #f7f7ff; }
-.desktop-greeting p { margin: 0 0 10px; font-size: 11px; font-family: "DM Mono", monospace; letter-spacing: .11em; text-transform: uppercase; color: rgba(255,255,255,.76); }
+.desktop-greeting p { margin: 0 0 10px; font-size: 11px; font-family: "Freshdesk Mono", "DM Mono", "Cascadia Mono", Consolas, monospace; letter-spacing: .11em; text-transform: uppercase; color: rgba(255,255,255,.76); }
 .desktop-greeting h1 { max-width: 520px; margin: 0; font-size: clamp(38px, 5vw, 74px); line-height: .98; letter-spacing: -.065em; font-weight: 700; text-shadow: 0 7px 38px rgba(13,12,46,.18); }
 .desktop-greeting button { display: inline-flex; align-items: center; gap: 7px; margin-top: 25px; padding: 10px 13px 10px 14px; border-radius: 11px; background: rgba(255,255,255,.15); box-shadow: inset 0 1px rgba(255,255,255,.25), 0 10px 24px rgba(5,6,17,.1); backdrop-filter: blur(14px); font-size: 12px; font-weight: 700; transition: transform .16s ease-out, background .16s ease-out; }
 .desktop-greeting button:hover { background: rgba(255,255,255,.22); transform: translateY(-1px); }.desktop-greeting button:active { transform: scale(.97); }
