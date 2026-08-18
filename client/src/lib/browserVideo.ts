@@ -25,6 +25,13 @@ function getRestrictedSource(host: string, url: string): BrowserVideoSource | nu
   return match ? { kind: "restricted", src: url, title: `${match.provider} 视频`, provider: match.provider, restriction: match.restriction } : null;
 }
 
+function getYoukuVideoId(parsed: URL) {
+  const pathname = decodeURIComponent(parsed.pathname);
+  const pathMatch = pathname.match(/(?:id_|embed\/|sid\/)(X[\w=]+)/i)?.[1];
+  const queryId = ["vid", "videoId", "video_id", "id"].map((key) => parsed.searchParams.get(key)).find((value) => /^X[\w=]+$/i.test(value ?? ""));
+  return pathMatch ?? queryId ?? null;
+}
+
 export function resolveBrowserVideo(url: string): BrowserVideoSource | null {
   if (hlsVideoPattern.test(url)) return { kind: "hls", src: url, title: "HLS 直播/点播", provider: "HLS" };
   if (directVideoPattern.test(url)) return { kind: "direct", src: url, title: "公开视频", provider: "公开视频" };
@@ -36,7 +43,7 @@ export function resolveBrowserVideo(url: string): BrowserVideoSource | null {
       return id ? { kind: "embed", src: `https://www.tiktok.com/player/v1/${id}?controls=1&autoplay=1&music_info=1&description=1&closed_caption=1`, title: "TikTok 视频", provider: "TikTok" } : null;
     }
     if (host.endsWith("youku.com")) {
-      const id = parsed.pathname.match(/\/id_([\w=]+)\.html/i)?.[1] ?? parsed.pathname.match(/\/embed\/([\w=]+)/i)?.[1];
+      const id = getYoukuVideoId(parsed);
       if (id) return { kind: "embed", src: `https://player.youku.com/embed/${id}?autoplay=1`, title: "优酷视频", provider: "优酷" };
     }
     if (host.endsWith("rumble.com")) {

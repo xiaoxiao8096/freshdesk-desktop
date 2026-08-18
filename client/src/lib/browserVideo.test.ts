@@ -29,6 +29,18 @@ describe("resolveBrowserVideo", () => {
     expect(resolveBrowserVideo("https://rumble.com/v5yexample-title.html")).toMatchObject({ kind: "embed", provider: "Rumble", src: expect.stringContaining("rumble.com/embed/v5yexample") });
   });
 
+  it("recognizes common Youku share, mobile, player and query URL variants", () => {
+    const variants = [
+      "https://v.youku.com/v_show/id_XNDYwMTEzMTY0.html",
+      "https://m.youku.com/alipay_video/id_XNDYwMTEzMTY0.html",
+      "https://player.youku.com/embed/XNDYwMTEzMTY0",
+      "https://player.youku.com/player.php/sid/XNDYwMTEzMTY0/v.swf",
+      "https://www.youku.com/video?vid=XNDYwMTEzMTY0",
+      "https://www.youku.com/video?videoId=XNDYwMTEzMTY0",
+    ];
+    variants.forEach((url) => expect(resolveBrowserVideo(url)).toMatchObject({ kind: "embed", provider: "优酷", src: expect.stringContaining("player.youku.com/embed/XNDYwMTEzMTY0") }));
+  });
+
   it("recognizes additional browser-playable direct media suffixes", () => {
     expect(resolveBrowserVideo("https://cdn.example.com/preview.m4v?download=1")).toMatchObject({ kind: "direct", provider: "公开视频" });
   });
