@@ -14,7 +14,7 @@ const currentEmbedParent = () => typeof window === "undefined" ? "localhost" : w
 const restrictedHosts: Array<{ hosts: string[]; provider: string; restriction: string }> = [
   { hosts: ["v.qq.com", "video.qq.com"], provider: "腾讯视频", restriction: "腾讯视频的多数内容需要官网登录、会员授权或地区校验，当前标签不能绕过这些限制。" },
   { hosts: ["iqiyi.com"], provider: "爱奇艺", restriction: "爱奇艺内容通常受会员、地区或 DRM 保护，需要在官网网页模式中按站点规则播放。" },
-  { hosts: ["youku.com"], provider: "优酷", restriction: "优酷部分视频依赖官网授权、广告或版权控制，不能作为通用 iframe 播放器嵌入。" },
+  { hosts: ["youku.com"], provider: "优酷", restriction: "此优酷链接未包含可公开嵌入的视频编号，或内容依赖官网授权、广告或版权控制。" },
   { hosts: ["douyin.com"], provider: "抖音", restriction: "抖音播放页通常需要站点脚本、登录或反嵌入校验，已保留网页模式入口。" },
   { hosts: ["kuaishou.com"], provider: "快手", restriction: "快手播放页可能需要登录、地区校验或站点脚本，已保留网页模式入口。" },
   { hosts: ["netflix.com", "disneyplus.com", "primevideo.com"], provider: "受 DRM 保护的视频服务", restriction: "此服务使用受保护播放与账号授权，浏览器原型不能绕过 DRM、登录或订阅限制。" },
@@ -31,6 +31,18 @@ export function resolveBrowserVideo(url: string): BrowserVideoSource | null {
   try {
     const parsed = new URL(url);
     const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
+    if (host.endsWith("tiktok.com")) {
+      const id = parsed.pathname.match(/\/video\/(\d+)/)?.[1] ?? parsed.pathname.match(/\/player\/v1\/(\d+)/)?.[1];
+      return id ? { kind: "embed", src: `https://www.tiktok.com/player/v1/${id}?controls=1&autoplay=1&music_info=1&description=1&closed_caption=1`, title: "TikTok 视频", provider: "TikTok" } : null;
+    }
+    if (host.endsWith("youku.com")) {
+      const id = parsed.pathname.match(/\/id_([\w=]+)\.html/i)?.[1] ?? parsed.pathname.match(/\/embed\/([\w=]+)/i)?.[1];
+      if (id) return { kind: "embed", src: `https://player.youku.com/embed/${id}?autoplay=1`, title: "优酷视频", provider: "优酷" };
+    }
+    if (host.endsWith("rumble.com")) {
+      const id = parsed.pathname.match(/\/(v[\w-]+)(?:[./]|$)/i)?.[1] ?? parsed.pathname.match(/\/embed\/([\w-]+)/i)?.[1];
+      return id ? { kind: "embed", src: `https://rumble.com/embed/${id}/?autoplay=1`, title: "Rumble 视频", provider: "Rumble" } : null;
+    }
     const restricted = getRestrictedSource(host, url);
     if (restricted) return restricted;
     if (host === "youtu.be") {

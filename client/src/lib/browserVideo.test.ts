@@ -24,6 +24,9 @@ describe("resolveBrowserVideo", () => {
     expect(resolveBrowserVideo("https://www.ted.com/talks/kate_raworth_a_healthy_economy_should_be_designed_to_thrive_not_grow")).toMatchObject({ kind: "embed", provider: "TED", src: expect.stringContaining("embed.ted.com/talks/") });
     expect(resolveBrowserVideo("https://example.wistia.com/medias/abcde12345")).toMatchObject({ kind: "embed", provider: "Wistia", src: expect.stringContaining("fast.wistia.net/embed/iframe/abcde12345") });
     expect(resolveBrowserVideo("https://www.facebook.com/FacebookDevelopers/videos/10152454700553553/")).toMatchObject({ kind: "embed", provider: "Facebook", src: expect.stringContaining("facebook.com/plugins/video.php") });
+    expect(resolveBrowserVideo("https://www.tiktok.com/@scout2015/video/6718335390845095173")).toMatchObject({ kind: "embed", provider: "TikTok", src: expect.stringContaining("tiktok.com/player/v1/6718335390845095173") });
+    expect(resolveBrowserVideo("https://v.youku.com/v_show/id_XNDYwMTEzMTY0.html")).toMatchObject({ kind: "embed", provider: "优酷", src: expect.stringContaining("player.youku.com/embed/XNDYwMTEzMTY0") });
+    expect(resolveBrowserVideo("https://rumble.com/v5yexample-title.html")).toMatchObject({ kind: "embed", provider: "Rumble", src: expect.stringContaining("rumble.com/embed/v5yexample") });
   });
 
   it("recognizes additional browser-playable direct media suffixes", () => {
@@ -38,6 +41,7 @@ describe("resolveBrowserVideo", () => {
   it("labels known login and DRM-first platforms instead of falsely promising playback", () => {
     expect(resolveBrowserVideo("https://v.qq.com/x/cover/example.html")).toMatchObject({ kind: "restricted", provider: "腾讯视频" });
     expect(resolveBrowserVideo("https://www.netflix.com/watch/123")).toMatchObject({ kind: "restricted", provider: "受 DRM 保护的视频服务" });
+    expect(resolveBrowserVideo("https://v.youku.com/v_show/without_an_embed_id.html")).toMatchObject({ kind: "restricted", provider: "优酷" });
   });
 
   it("does not treat ordinary web pages as videos", () => {
