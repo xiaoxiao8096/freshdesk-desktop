@@ -12,6 +12,7 @@ import { NativeVideoPlayer } from "@/components/NativeVideoPlayer";
 import { bringWindowToFront, clampRestoredWindowBounds, closeAllWindows, closeWindowById, minimizeAllWindows, nextVisibleWindowAfterAction, orderWindowsByZIndex, sanitizeRestoredWindows, topVisibleWindow } from "@/lib/windowState";
 import { recordRecentVideo } from "@/lib/recentVideos";
 import { loadStoredSnapshot } from "@/lib/desktopSnapshot";
+import { createDesktopBackup, desktopBackupFilename, parseDesktopBackup } from "@/lib/desktopBackup";
 import {
   Archive,
   ArrowLeft,
@@ -154,7 +155,12 @@ type BrowserDownload = {
   title: string;
   url: string;
   createdAt: string;
-  status: "已保存" | "准备就绪";
+  status: "准备就绪" | "下载中" | "已完成" | "已保存" | "已取消" | "下载失败";
+  progress?: number;
+  receivedBytes?: number;
+  totalBytes?: number;
+  native?: boolean;
+  path?: string;
 };
 
 type RecentVideo = {
@@ -648,6 +654,7 @@ export default function Home() {
   const [frameStatus, setFrameStatus] = useState<"idle" | "loading" | "loaded" | "restricted">("idle");
   const [browserFallbackNotice, setBrowserFallbackNotice] = useState("");
   const [desktopUpdateStatus, setDesktopUpdateStatus] = useState(() => window.freshdeskDesktop?.isElectron ? "正在等待更新检查…" : "网页版会随发布即时更新");
+  const [desktopBackupStatus, setDesktopBackupStatus] = useState("数据仅保存在当前设备；可随时导出或创建备份。");
   const [readerLinkFilter, setReaderLinkFilter] = useState("");
   const [browserHistoryEntries, setBrowserHistoryEntries] = useState<BrowserHistoryEntry[]>(() => restoredDesktopState?.browserHistoryEntries ?? []);
   const [browserDownloads, setBrowserDownloads] = useState<BrowserDownload[]>(() => restoredDesktopState?.browserDownloads ?? []);
@@ -885,9 +892,13 @@ export default function Home() {
 
   useEffect(() => {
     if (!activeWindowId) return;
-    const frame = window.requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-app-window="${activeWindowId}"]`)?.focus({ preventScroll: true }));
+    const frame = window.requestAnimationFrame(() => {
+      const focused = document.activeElement;
+      const preservesTextInput = focused instanceof HTMLElement && Boolean(focused.closest("input, textarea, select, [contenteditable='true'], webview, iframe"));
+      if (!preservesTextInput) document.querySelector<HTMLElement>(`[data-app-window="${activeWindowId}"]`)?.focus({ preventScroll: true });
+    });
     return () => window.cancelAnimationFrame(frame);
-  }, [activeWindowId, windows]);
+  }, [activeWindowId]);
 
   useEffect(() => {
     try { window.localStorage.setItem("freshdesk.setup-complete", String(setupComplete)); } catch { /* local storage may be disabled */ }
@@ -1070,9 +1081,26 @@ export default function Home() {
     return window.freshdeskDesktop.onUpdateStatus((status) => setDesktopUpdateStatus(status.message));
   }, [isElectronDesktop]);
 
+  useEffect(() => {
+    if (!isElectronDesktop || !window.freshdeskDesktop?.onDownloadStatus) return;
+    return window.freshdeskDesktop.onDownloadStatus((status) => {
+      const statusLabel = { downloading: "下载中", completed: "已完成", cancelled: "已取消", failed: "下载失败" }[status.state] as BrowserDownload["status"];
+      setBrowserDownloads((items) => {
+        const next: BrowserDownload = { id: status.id, title: status.title, url: status.url, createdAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }), status: statusLabel, progress: status.progress, receivedBytes: status.receivedBytes, totalBytes: status.totalBytes, native: true, path: status.path };
+        const existing = items.find((item) => item.id === status.id);
+        return existing ? items.map((item) => item.id === status.id ? { ...item, ...next, createdAt: item.createdAt } : item) : [next, ...items];
+      });
+    });
+  }, [isElectronDesktop]);
+
   const bringToFront = (id: AppName) => {
-    setActiveWindowId(id);
+    setActiveWindowId((currentId) => currentId === id ? currentId : id);
     setWindows((currentWindows) => bringWindowToFront(currentWindows, id));
+  };
+
+  const focusElectronWebview = () => {
+    if (!isElectronDesktop || activeBrowserTab?.mode !== "web") return;
+    window.requestAnimationFrame(() => (electronWebviewRef.current as (HTMLElement & { focus?: () => void }) | null)?.focus?.());
   };
 
   const updateWindowBounds = (id: AppName, bounds: WindowBounds) => {
@@ -1255,11 +1283,40 @@ export default function Home() {
     setFrameStatus("idle");
   };
 
+  const startBrowserDownload = (url: string, title: string) => {
+    if (!/^https?:\/\//i.test(url)) return;
+    const id = `download-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const createdAt = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+    const pending: BrowserDownload = { id, title, url, createdAt, status: "准备就绪", progress: 0, native: isElectronDesktop };
+    setBrowserDownloads((items) => [pending, ...items]);
+    if (isElectronDesktop && window.freshdeskDesktop?.startDownload) {
+      void window.freshdeskDesktop.startDownload({ id, url, title }).catch(() => {
+        setBrowserDownloads((items) => items.map((item) => item.id === id ? { ...item, status: "下载失败", progress: 0 } : item));
+      });
+      return;
+    }
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = title;
+    link.rel = "noreferrer";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setBrowserDownloads((items) => items.map((item) => item.id === id ? { ...item, status: "已完成", progress: 100 } : item));
+  };
+
+  const cancelBrowserDownload = (id: string) => {
+    if (!window.freshdeskDesktop?.cancelDownload) return;
+    void window.freshdeskDesktop.cancelDownload(id).then((cancelled) => {
+      if (cancelled) setBrowserDownloads((items) => items.map((item) => item.id === id ? { ...item, status: "已取消" } : item));
+    });
+  };
+
   const saveCurrentDownload = () => {
     if (!activeBrowserTab || activeBrowserTab.url === "about:blank") return;
     const safeTitle = (activeBrowserTab.title || "网页摘录").replace(/[\\/:*?"<>|]/g, "-").slice(0, 64);
     const filePath = `${VIRTUAL_HOME}/Downloads/${safeTitle}.txt`;
-    setBrowserDownloads((items) => [{ id: `download-${Date.now()}`, title: `${safeTitle}.txt`, url: activeBrowserTab.url, createdAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }), status: "已保存" }, ...items]);
+    setBrowserDownloads((items) => [{ id: `saved-${Date.now()}`, title: `${safeTitle}.txt`, url: activeBrowserTab.url, createdAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }), status: "已保存", progress: 100 }, ...items]);
     setVirtualFileSystem((fileSystem) => fileSystem.files.includes(filePath) ? fileSystem : { ...fileSystem, files: [...fileSystem.files, filePath] });
     setFileContents((contents) => ({ ...contents, [filePath]: `# ${safeTitle}\n\n${readerQuery.data?.summary || "这是从 Freshdesk 浏览器兼容阅读模式保存的网页摘录。"}\n\n来源：${activeBrowserTab.url}` }));
   };
@@ -1279,7 +1336,8 @@ export default function Home() {
     const filePath = `${VIRTUAL_HOME}/Downloads/${title}`;
     setVirtualFileSystem((fileSystem) => fileSystem.files.includes(filePath) ? fileSystem : { ...fileSystem, files: [...fileSystem.files, filePath] });
     setFileContents((contents) => ({ ...contents, [filePath]: source }));
-    setBrowserDownloads((items) => [{ id: `image-download-${Date.now()}`, title, url: source, createdAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }), status: "已保存" }, ...items]);
+    if (!isElectronDesktop) setBrowserDownloads((items) => [{ id: `image-saved-${Date.now()}`, title, url: source, createdAt: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }), status: "已保存", progress: 100 }, ...items]);
+    startBrowserDownload(source, title);
   };
 
   const fetchBrowserSearch = async (query: string) => {
@@ -1589,6 +1647,67 @@ export default function Home() {
     setTerminalInput("");
   };
 
+  const desktopBackupPayload = () => createDesktopBackup(desktopSnapshotRef.current ?? {});
+
+  const downloadBackupInBrowser = (backup: ReturnType<typeof desktopBackupPayload>) => {
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = desktopBackupFilename();
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportDesktopState = async () => {
+    const backup = desktopBackupPayload();
+    try {
+      if (isElectronDesktop && window.freshdeskDesktop?.exportDesktopState) {
+        const result = await window.freshdeskDesktop.exportDesktopState(backup);
+        setDesktopBackupStatus(result.saved ? `已导出：${result.path ?? "已选择的位置"}` : "已取消导出。");
+        return;
+      }
+      downloadBackupInBrowser(backup);
+      setDesktopBackupStatus("已导出 JSON 文件，请保存在安全的位置。");
+    } catch {
+      setDesktopBackupStatus("导出未完成，请检查文件夹权限后重试。");
+    }
+  };
+
+  const createDesktopBackupFile = async () => {
+    const backup = desktopBackupPayload();
+    try {
+      if (isElectronDesktop && window.freshdeskDesktop?.backupDesktopState) {
+        const result = await window.freshdeskDesktop.backupDesktopState(backup);
+        setDesktopBackupStatus(result.saved ? `已创建备份：${result.path ?? "文档\\Freshdesk Desktop Backups"}` : "备份未完成。");
+        return;
+      }
+      downloadBackupInBrowser(backup);
+      setDesktopBackupStatus("网页版已下载一份备份 JSON 文件。");
+    } catch {
+      setDesktopBackupStatus("备份未完成，请检查文件夹权限后重试。");
+    }
+  };
+
+  const restoreDesktopBackup = async () => {
+    if (!isElectronDesktop || !window.freshdeskDesktop?.openDesktopBackup) {
+      setDesktopBackupStatus("网页版可导出备份；恢复操作请在 Windows 桌面版中完成。");
+      return;
+    }
+    try {
+      const result = await window.freshdeskDesktop.openDesktopBackup();
+      if (!result.selected || !result.raw) { setDesktopBackupStatus("未选择备份文件。"); return; }
+      const backup = parseDesktopBackup<DesktopSnapshot>(result.raw);
+      if (!backup) { setDesktopBackupStatus("该文件不是可用的 Freshdesk Desktop 备份。未修改当前数据。"); return; }
+      window.localStorage.setItem(DESKTOP_STATE_KEY, JSON.stringify(backup.snapshot));
+      setDesktopBackupStatus("备份已验证并写入本机。重启应用后将恢复该状态。");
+    } catch {
+      setDesktopBackupStatus("恢复未完成，当前桌面数据未被修改。");
+    }
+  };
+
   const currentTime = now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
   const currentDate = now.toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "short" });
 
@@ -1752,7 +1871,7 @@ export default function Home() {
 
           {windowItem.id === "settings" && (
             <WindowChrome title="设置" appWindow={windowItem} onClose={() => closeApp("settings")} onMinimize={() => minimizeApp("settings")} onFocus={() => bringToFront("settings")} onMaximize={() => toggleMaximize("settings")} onBoundsChange={(bounds) => updateWindowBounds("settings", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("settings", side)} className="settings-window">
-              <div className="settings-body"><aside className="settings-sidebar"><div className="settings-profile"><img src={BRAND_MARK} alt="" /><div><strong>你的工作空间</strong><span>本机帐户</span></div></div><button className="settings-active"><Wifi size={16} /> Wi‑Fi</button><button><Bluetooth size={16} /> 蓝牙</button><button><Moon size={16} /> 专注模式</button><button><Gauge size={16} /> 桌面与外观</button></aside><section className="settings-content"><header><h2>桌面与外观</h2><p>按照此刻的光线调整你的工作空间。</p></header><div className="setting-block"><div><strong>外观</strong><span>让系统界面与壁纸保持平衡。</span></div><div className="appearance-choice"><button className={systemAppearance === "light" ? "chosen" : ""} onClick={() => setSystemAppearance("light")}><span className="light-preview" />浅色</button><button className={systemAppearance === "dark" ? "chosen" : ""} onClick={() => setSystemAppearance("dark")}><span className="dark-preview" />深色</button></div></div><div className="setting-block wallpaper-block"><div><strong><Palette size={13} /> 桌面壁纸</strong><span>选择一张原创背景，立即应用到桌面。</span></div><div className="wallpaper-options">{wallpapers.map((wallpaper) => <button key={wallpaper.id} className={activeWallpaperId === wallpaper.id ? "selected" : ""} onClick={() => setActiveWallpaperId(wallpaper.id)}><img src={wallpaper.src} alt="" /><span>{wallpaper.title}</span></button>)}</div></div><div className="setting-block"><div><strong>应用更新</strong><span>{desktopUpdateStatus}</span></div><button className="soft-action" disabled={!isElectronDesktop} onClick={() => void window.freshdeskDesktop?.checkForUpdates()}>检查更新</button></div><div className="setting-block"><div><strong>新手引导</strong><span>重新查看欢迎界面和桌面提示。</span></div><button className="soft-action" onClick={() => { setSetupComplete(false); setShowSetupChoice(false); }}>再次打开</button></div><div className="setting-block"><div><strong>音量</strong><span>当前输出：内建扬声器</span></div><input aria-label="系统音量" type="range" min={0} max={100} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></div></section></div>
+              <div className="settings-body"><aside className="settings-sidebar"><div className="settings-profile"><img src={BRAND_MARK} alt="" /><div><strong>你的工作空间</strong><span>本机帐户</span></div></div><button className="settings-active"><Wifi size={16} /> Wi‑Fi</button><button><Bluetooth size={16} /> 蓝牙</button><button><Moon size={16} /> 专注模式</button><button><Gauge size={16} /> 桌面与外观</button></aside><section className="settings-content"><header><h2>桌面与外观</h2><p>按照此刻的光线调整你的工作空间。</p></header><div className="setting-block"><div><strong>外观</strong><span>让系统界面与壁纸保持平衡。</span></div><div className="appearance-choice"><button className={systemAppearance === "light" ? "chosen" : ""} onClick={() => setSystemAppearance("light")}><span className="light-preview" />浅色</button><button className={systemAppearance === "dark" ? "chosen" : ""} onClick={() => setSystemAppearance("dark")}><span className="dark-preview" />深色</button></div></div><div className="setting-block wallpaper-block"><div><strong><Palette size={13} /> 桌面壁纸</strong><span>选择一张原创背景，立即应用到桌面。</span></div><div className="wallpaper-options">{wallpapers.map((wallpaper) => <button key={wallpaper.id} className={activeWallpaperId === wallpaper.id ? "selected" : ""} onClick={() => setActiveWallpaperId(wallpaper.id)}><img src={wallpaper.src} alt="" /><span>{wallpaper.title}</span></button>)}</div></div><div className="setting-block"><div><strong>应用更新</strong><span>{desktopUpdateStatus}</span></div><button className="soft-action" disabled={!isElectronDesktop} onClick={() => void window.freshdeskDesktop?.checkForUpdates()}>检查更新</button></div><div className="setting-block setting-data-block"><div><strong>桌面数据</strong><span>{desktopBackupStatus}</span></div><div className="settings-data-actions"><button className="soft-action" onClick={() => void exportDesktopState()}><Download size={13} /> 导出</button><button className="soft-action" onClick={() => void createDesktopBackupFile()}><Archive size={13} /> 备份</button><button className="soft-action" disabled={!isElectronDesktop} onClick={() => void restoreDesktopBackup()}><RotateCw size={13} /> 恢复</button></div></div><div className="setting-block"><div><strong>新手引导</strong><span>重新查看欢迎界面和桌面提示。</span></div><button className="soft-action" onClick={() => { setSetupComplete(false); setShowSetupChoice(false); }}>再次打开</button></div><div className="setting-block"><div><strong>音量</strong><span>当前输出：内建扬声器</span></div><input aria-label="系统音量" type="range" min={0} max={100} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></div></section></div>
             </WindowChrome>
           )}
 
@@ -1782,8 +1901,8 @@ export default function Home() {
                   <button type="button" className={`bookmark-current ${bookmarks.some((bookmark) => bookmark.url === activeBrowserTab.url) ? "saved" : ""}`} aria-label="收藏当前页面" onClick={toggleCurrentBookmark}>{bookmarks.some((bookmark) => bookmark.url === activeBrowserTab.url) ? <BookmarkCheck size={16} /> : <Bookmark size={16} />}</button>
                   <span className="browser-status">{activeBrowserTab.loading ? "正在连接" : "浏览器"}</span>
                 </form>
-                <div className="browser-frame-wrap">
-                  {activeBrowserTab.mode === "web" && isElectronDesktop ? createElement("webview", { key: `${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`, ref: (node: HTMLElement | null) => { electronWebviewRef.current = node; }, className: "browser-webview", src: activeBrowserTab.url, partition: "persist:freshdesk-browser", webpreferences: "contextIsolation=yes, sandbox=yes", allowpopups: "false", onFocus: () => bringToFront("browser") }) : null}
+                <div className="browser-frame-wrap" onPointerDownCapture={focusElectronWebview}>
+                  {activeBrowserTab.mode === "web" && isElectronDesktop ? createElement("webview", { key: `${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`, ref: (node: HTMLElement | null) => { electronWebviewRef.current = node; }, className: "browser-webview", src: activeBrowserTab.url, partition: "persist:freshdesk-browser", webpreferences: "contextIsolation=yes, sandbox=yes", allowpopups: "false", tabIndex: 0, onFocus: () => bringToFront("browser"), onDomReady: focusElectronWebview }) : null}
                   {activeBrowserTab.mode === "media" ? (
                     <section className="browser-media-page">
                       <header><div><span className="eyebrow">当前标签 · 图片查看</span><h2>{activeBrowserTab.title}</h2><p>{activeBrowserTab.mediaItems?.length ? `${(activeBrowserTab.mediaIndex ?? 0) + 1} / ${activeBrowserTab.mediaItems.length} · 图片留在当前标签中查看` : "公开图片资源"}</p></div><div className="media-actions"><button onClick={returnToReader}><ArrowLeft size={14} /> 返回文章</button><button onClick={downloadCurrentImage}><Download size={14} /> 下载到 Finder</button><button onClick={() => setMediaZoom((value) => Math.max(60, value - 20))} aria-label="缩小图片"><ZoomOut size={15} /></button><span>{mediaZoom}%</span><button onClick={() => setMediaZoom((value) => Math.min(220, value + 20))} aria-label="放大图片"><ZoomIn size={15} /></button></div></header><div className="browser-media-stage"><button aria-label="上一张图片" disabled={(activeBrowserTab.mediaItems?.length ?? 0) < 2} onClick={() => stepReaderImage(-1)}><ChevronLeft size={22} /></button><figure>{mediaImageError ? <div className="browser-media-error"><CircleHelp size={24} /><strong>图片暂时无法加载</strong><span>{mediaImageError}</span><button onClick={() => setMediaImageError(null)}>重试</button></div> : <img src={activeBrowserTab.url} alt={activeBrowserTab.title} style={{ transform: `scale(${mediaZoom / 100})` }} onError={() => setMediaImageError("该图片来源拒绝了嵌入或暂时不可用。可返回文章继续阅读其他内容。")} />}<figcaption>{activeBrowserTab.title}</figcaption></figure><button aria-label="下一张图片" disabled={(activeBrowserTab.mediaItems?.length ?? 0) < 2} onClick={() => stepReaderImage(1)}><ChevronRight size={22} /></button></div><div className="browser-media-strip">{activeBrowserTab.mediaItems?.map((item, index) => <button key={item.src} className={index === activeBrowserTab.mediaIndex ? "active" : ""} onClick={() => { updateActiveBrowserTab((tab) => ({ ...tab, mediaIndex: index, title: item.alt || "网页图片", address: item.src, url: item.src })); setMediaImageError(null); }}><img src={item.src} alt={item.alt} /></button>)}</div></section>
@@ -1809,7 +1928,7 @@ export default function Home() {
                   {bookmarksOpen && <aside className="bookmark-drawer"><header><div><Bookmark size={15} /><span>收藏夹</span></div><button aria-label="关闭收藏夹" onClick={() => setBookmarksOpen(false)}><X size={14} /></button></header>{bookmarks.length ? <div className="bookmark-list">{bookmarks.map((bookmark) => <button key={bookmark.id} onClick={() => openBookmark(bookmark)}><Globe2 size={14} /><span><b>{bookmark.title}</b><small>{labelFromUrl(bookmark.url)}</small></span></button>)}</div> : <div className="bookmark-empty"><Bookmark size={18} /><span>还没有收藏的页面</span></div>}</aside>}
                   {historyOpen && <aside className="bookmark-drawer browser-history-drawer"><header><div><History size={15} /><span>浏览历史</span></div><button aria-label="关闭浏览历史" onClick={() => setHistoryOpen(false)}><X size={14} /></button></header>{browserHistoryEntries.length ? <div className="bookmark-list">{browserHistoryEntries.map((entry) => <button key={entry.id} onClick={() => entry.mode === "search" ? void fetchBrowserSearch(entry.address.replace(/^search:/, "")) : entry.mode === "reader" ? openInReader(entry.address, entry.title) : navigateBrowser(entry.address)}><History size={14} /><span><b>{entry.title}</b><small>{entry.visitedAt} · {labelFromUrl(entry.address.replace(/^search:/, ""))}</small></span></button>)}</div> : <div className="bookmark-empty"><History size={18} /><span>还没有浏览记录</span></div>}<footer><button onClick={() => setBrowserHistoryEntries([])}>清除历史记录</button></footer></aside>}
                   {recentVideosOpen && <aside className="bookmark-drawer browser-history-drawer"><header><div><Play size={15} /><span>最近播放</span></div><button aria-label="关闭最近播放" onClick={() => setRecentVideosOpen(false)}><X size={14} /></button></header>{recentVideos.length ? <div className="bookmark-list">{recentVideos.map((item) => <button key={item.id} onClick={() => resumeRecentVideo(item)}><Play size={14} /><span><b>{item.title}</b><small>{item.provider} · {item.watchedAt}</small></span></button>)}</div> : <div className="bookmark-empty"><Play size={18} /><span>播放过的视频会出现在这里</span></div>}<footer><button onClick={() => setRecentVideos([])}>清空最近播放</button></footer></aside>}
-                  {downloadsOpen && <aside className="bookmark-drawer browser-history-drawer"><header><div><Download size={15} /><span>下载项</span></div><button aria-label="关闭下载项" onClick={() => setDownloadsOpen(false)}><X size={14} /></button></header>{browserDownloads.length ? <div className="bookmark-list">{browserDownloads.map((item) => <button key={item.id} onClick={() => { setPreviewFilePath(`${VIRTUAL_HOME}/Downloads/${item.title}`); openApp("finder"); }}><FileText size={14} /><span><b>{item.title}</b><small>{item.createdAt} · {item.status}</small></span></button>)}</div> : <div className="bookmark-empty"><Download size={18} /><span>在兼容阅读页面点“保存到下载项”即可添加</span></div>}<footer><button onClick={() => setBrowserDownloads([])}>清空下载记录</button></footer></aside>}
+                  {downloadsOpen && <aside className="bookmark-drawer browser-history-drawer browser-download-drawer"><header><div><Download size={15} /><span>下载项</span></div><button aria-label="关闭下载项" onClick={() => setDownloadsOpen(false)}><X size={14} /></button></header>{browserDownloads.length ? <div className="browser-download-list">{browserDownloads.map((item) => { const progress = item.progress ?? (item.status === "已保存" || item.status === "已完成" ? 100 : 0); const isDownloading = item.status === "下载中" || item.status === "准备就绪"; return <article key={item.id}><button className="browser-download-open" disabled={isDownloading || (item.native && item.status !== "已完成")} onClick={() => { if (!item.native) { setPreviewFilePath(`${VIRTUAL_HOME}/Downloads/${item.title}`); openApp("finder"); } }}><FileText size={14} /><span><b>{item.title}</b><small>{item.createdAt} · {item.status}{item.native && item.path ? " · 系统下载目录" : ""}</small></span></button><div className="browser-download-progress" aria-label={`${item.title} 下载进度`}><i style={{ width: `${progress}%` }} /><small>{isDownloading ? `${progress}%` : item.status}</small></div>{isDownloading && item.native ? <button className="browser-download-cancel" aria-label={`取消下载 ${item.title}`} onClick={() => cancelBrowserDownload(item.id)}><X size={13} /> 取消</button> : null}</article>; })}</div> : <div className="bookmark-empty"><Download size={18} /><span>在兼容阅读或图片查看中保存内容，即可在这里查看进度。</span></div>}<footer><button onClick={() => setBrowserDownloads((items) => items.filter((item) => item.status === "下载中" || item.status === "准备就绪"))}>清除已完成记录</button></footer></aside>}
                   {groupsOpen && <aside className="group-drawer"><header><div><LayoutGrid size={15} /><span>标签页分组</span></div><button aria-label="关闭标签分组" onClick={() => setGroupsOpen(false)}><X size={14} /></button></header><div className="group-drawer-actions"><button onClick={createTabGroup}><Plus size={14} /> 用当前标签新建分组</button><button onClick={() => assignTabToGroup(undefined)} disabled={!activeBrowserTab.groupId}><X size={14} /> 移出当前分组</button></div><div className="group-drawer-list">{browserTabGroups.length ? browserTabGroups.map((group) => <section key={group.id}><div className="group-drawer-row"><i style={{ background: group.color }} /><input value={group.title} aria-label="分组名称" onChange={(event) => renameGroup(group.id, event.target.value)} onBlur={(event) => { if (!event.target.value.trim()) renameGroup(group.id, "未命名分组"); }} /><button aria-label={`将当前标签移入 ${group.title}`} onClick={() => assignTabToGroup(group.id)}><ChevronRight size={13} /></button><button aria-label={`删除 ${group.title}`} onClick={() => removeTabGroup(group.id)}><Trash2 size={12} /></button></div><small>{groupedTabs(group.id).length} 个标签页 · 拖放标签也可加入</small></section>) : <div className="group-empty"><LayoutGrid size={18} /><span>先从当前标签创建一个工作组</span></div>}</div></aside>}
                 </div>
               </div>

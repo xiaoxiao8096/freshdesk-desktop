@@ -39,4 +39,8 @@ describe("window state", () => {
     const focused = bringWindowToFront(windows, "finder");
     expect(topVisibleWindow(focused)?.id).toBe("finder");
   });
+
+  it("does not rewrite window state when an already frontmost browser receives another input focus event", () => {
+    expect(bringWindowToFront(windows, "browser")).toBe(windows);
+  });
 });

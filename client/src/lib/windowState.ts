@@ -45,6 +45,9 @@ export function topVisibleWindow<T extends WindowStateItem>(windows: T[]) {
 }
 
 export function bringWindowToFront<T extends WindowStateItem>(windows: T[], id: T["id"]) {
+  const currentTop = topVisibleWindow(windows);
+  const target = windows.find((windowItem) => windowItem.id === id);
+  if (target && !target.minimized && currentTop?.id === id) return windows;
   const top = Math.max(25, ...windows.map((windowItem) => windowItem.zIndex));
   return windows.map((windowItem) => windowItem.id === id ? { ...windowItem, minimized: false, zIndex: top + 1 } : windowItem);
 }

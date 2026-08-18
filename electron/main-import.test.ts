@@ -10,4 +10,14 @@ describe("Electron 主进程依赖加载", () => {
     expect(mainProcessSource).toContain("const { autoUpdater } = electronUpdater;");
     expect(mainProcessSource).not.toContain('import { autoUpdater } from "electron-updater";');
   });
+
+  it("只为受控 IPC 暴露下载取消与本地备份文件操作", () => {
+    expect(mainProcessSource).toContain('ipcMain.handle("freshdesk:start-download"');
+    expect(mainProcessSource).toContain('ipcMain.handle("freshdesk:cancel-download"');
+    expect(mainProcessSource).toContain('ipcMain.handle("freshdesk:export-desktop-state"');
+    expect(mainProcessSource).toContain('ipcMain.handle("freshdesk:backup-desktop-state"');
+    expect(mainProcessSource).toContain('ipcMain.handle("freshdesk:open-desktop-backup"');
+    expect(mainProcessSource).toContain("function validateDownloadRequest(request)");
+    expect(mainProcessSource).toContain("function validateBackupPayload(payload)");
+  });
 });

@@ -1,7 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, session, shell } from "electron";
 import electronUpdater from "electron-updater";
 import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,9 +9,67 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { autoUpdater } = electronUpdater;
 let mainWindow = null;
 let serverProcess = null;
+const pendingDownloads = new Map();
+const activeDownloads = new Map();
 
 function sendUpdateStatus(status) {
   mainWindow?.webContents.send("freshdesk:update-status", status);
+}
+
+function sendDownloadStatus(status) {
+  mainWindow?.webContents.send("freshdesk:download-status", status);
+}
+
+function safeDownloadName(value) {
+  const normalized = String(value || "download").replace(/[\\/:*?"<>|]/g, "-").trim();
+  return normalized.slice(0, 120) || "download";
+}
+
+function setupDownloads() {
+  session.defaultSession.on("will-download", (_event, item) => {
+    const sourceUrl = item.getURL();
+    const matched = [...pendingDownloads.values()].find((request) => request.url === sourceUrl);
+    if (matched) pendingDownloads.delete(matched.id);
+    const id = matched?.id ?? `guest-download-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const title = safeDownloadName(matched?.title || item.getFilename());
+    const savePath = path.join(app.getPath("downloads"), title);
+    item.setSavePath(savePath);
+    activeDownloads.set(id, item);
+    sendDownloadStatus({ id, state: "downloading", title, url: sourceUrl, progress: 0, receivedBytes: 0, totalBytes: item.getTotalBytes?.() ?? 0 });
+    item.on("updated", (_updatedEvent, state) => {
+      if (state === "interrupted") {
+        sendDownloadStatus({ id, state: "failed", title, url: sourceUrl, progress: 0, message: "下载被系统中断" });
+        return;
+      }
+      const totalBytes = item.getTotalBytes();
+      const receivedBytes = item.getReceivedBytes();
+      const progress = totalBytes > 0 ? Math.min(99, Math.round((receivedBytes / totalBytes) * 100)) : 0;
+      sendDownloadStatus({ id, state: "downloading", title, url: sourceUrl, progress, receivedBytes, totalBytes });
+    });
+    item.once("done", (_doneEvent, state) => {
+      activeDownloads.delete(id);
+      const completed = state === "completed";
+      sendDownloadStatus({ id, state: completed ? "completed" : state === "cancelled" ? "cancelled" : "failed", title, url: sourceUrl, progress: completed ? 100 : 0, path: item.getSavePath(), message: completed ? "已保存到系统下载目录" : state === "cancelled" ? "已取消下载" : "下载未完成" });
+    });
+  });
+}
+
+function validateDownloadRequest(request) {
+  if (!request || typeof request !== "object" || typeof request.id !== "string" || typeof request.url !== "string") throw new Error("下载请求无效。");
+  const url = new URL(request.url);
+  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("仅支持 HTTP 或 HTTPS 下载链接。");
+  return { id: request.id.slice(0, 160), url: url.toString(), title: safeDownloadName(request.title || path.basename(url.pathname) || "download") };
+}
+
+function validateBackupPayload(payload) {
+  if (!payload || typeof payload !== "object") throw new Error("备份内容无效。");
+  const serialized = JSON.stringify(payload);
+  if (serialized.length > 5 * 1024 * 1024) throw new Error("备份内容过大，未写入本地文件。");
+  return serialized;
+}
+
+function backupName(prefix = "Freshdesk-Desktop-backup") {
+  return `${prefix}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
 }
 
 function configureAutoUpdates() {
@@ -157,8 +215,53 @@ ipcMain.handle("freshdesk:check-for-updates", () => app.isPackaged ? autoUpdater
 ipcMain.handle("freshdesk:install-update", () => {
   if (app.isPackaged) autoUpdater.quitAndInstall();
 });
+ipcMain.handle("freshdesk:start-download", (_event, request) => {
+  const download = validateDownloadRequest(request);
+  pendingDownloads.set(download.id, download);
+  mainWindow?.webContents.downloadURL(download.url);
+  return { accepted: true, id: download.id };
+});
+ipcMain.handle("freshdesk:cancel-download", (_event, id) => {
+  const item = activeDownloads.get(id);
+  if (!item) return false;
+  item.cancel();
+  return true;
+});
+ipcMain.handle("freshdesk:export-desktop-state", async (_event, payload) => {
+  const serialized = validateBackupPayload(payload);
+  const target = await dialog.showSaveDialog(mainWindow, {
+    title: "导出 Freshdesk Desktop 数据",
+    defaultPath: path.join(app.getPath("downloads"), backupName("Freshdesk-Desktop-export")),
+    filters: [{ name: "Freshdesk Desktop 备份", extensions: ["json"] }],
+  });
+  if (target.canceled || !target.filePath) return { saved: false };
+  writeFileSync(target.filePath, serialized, "utf8");
+  return { saved: true, path: target.filePath };
+});
+ipcMain.handle("freshdesk:backup-desktop-state", (_event, payload) => {
+  const serialized = validateBackupPayload(payload);
+  const backupDirectory = path.join(app.getPath("documents"), "Freshdesk Desktop Backups");
+  mkdirSync(backupDirectory, { recursive: true });
+  const filePath = path.join(backupDirectory, backupName());
+  writeFileSync(filePath, serialized, "utf8");
+  return { saved: true, path: filePath };
+});
+ipcMain.handle("freshdesk:open-desktop-backup", async () => {
+  const selected = await dialog.showOpenDialog(mainWindow, {
+    title: "选择 Freshdesk Desktop 备份",
+    properties: ["openFile"],
+    filters: [{ name: "Freshdesk Desktop 备份", extensions: ["json"] }],
+  });
+  if (selected.canceled || !selected.filePaths[0]) return { selected: false };
+  const raw = readFileSync(selected.filePaths[0], "utf8");
+  if (raw.length > 5 * 1024 * 1024) throw new Error("备份文件过大，未导入。");
+  return { selected: true, raw, path: selected.filePaths[0] };
+});
 
-app.whenReady().then(createWindow).catch((error) => {
+app.whenReady().then(() => {
+  setupDownloads();
+  return createWindow();
+}).catch((error) => {
   console.error(error);
   showStartupFailure(error);
 });

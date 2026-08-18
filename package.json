@@ -1,6 +1,6 @@
 {
   "name": "freshdesk-mac-experience",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "type": "module",
   "main": "electron/main.mjs",
   "license": "MIT",
@@ -13,7 +13,7 @@
     "test": "vitest run",
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
     "electron:dev": "ELECTRON_START_URL=http://localhost:3000 electron .",
-    "electron:pack": "rm -rf release dist/win-unpacked && rm -f dist/Freshdesk-Desktop-${npm_package_version}-win-x64-portable.zip && pnpm build && electron-builder --win dir --x64 --publish never && cd release && zip -r -1 ../dist/Freshdesk-Desktop-${npm_package_version}-win-x64-portable.zip win-unpacked",
+    "electron:pack": "rm -rf release dist/win-unpacked && rm -f dist/Freshdesk-Desktop-*-win-x64-portable.zip && pnpm build && electron-builder --win dir --x64 --publish never && cd release && zip -r -1 ../dist/Freshdesk-Desktop-${npm_package_version}-win-x64-portable.zip win-unpacked",
     "electron:release": "pnpm build && electron-builder --win nsis --x64 --publish always"
   },
   "dependencies": {
@@ -118,6 +118,7 @@
     "asar": false,
     "files": [
       "dist/**",
+      "!dist/Freshdesk-Desktop-*-win-x64-portable.zip",
       "electron/**",
       "package.json"
     ],
