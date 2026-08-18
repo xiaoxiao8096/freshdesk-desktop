@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { enrichBilibiliVideoTitles, evaluateEmbedPolicy, extractReaderImages, extractReaderLinks, safeBrowserUrl } from "./routers/browser";
+import { enrichBilibiliVideoTitles, evaluateEmbedPolicy, extractReaderBody, extractReaderImages, extractReaderLinks, extractReaderVideos, safeBrowserUrl } from "./routers/browser";
 
 describe("browser reader helpers", () => {
   it("rejects local and non-web URLs", () => {
@@ -79,6 +79,23 @@ describe("browser reader helpers", () => {
     const html = '<img src="/static/images/site-icon.svg" alt="图标"><img src="/thumb/20px-control.png" alt="控件"><img src="/photos/hero.jpg" alt="正文大图">';
     expect(extractReaderImages(html, "https://example.com/article")).toEqual([
       { src: "https://example.com/photos/hero.jpg", alt: "正文大图" },
+    ]);
+  });
+
+  it("extracts an article body and public direct or official embedded videos for mixed-media reading", () => {
+    const html = '<header>站点导航</header><article><h1>图文视频报道</h1><p>正文内容应该保留在同一标签。</p><video title="现场视频" src="/media/report.mp4"></video><iframe title="公开视频" src="https://www.youtube.com/embed/abc123"></iframe></article>';
+    expect(extractReaderBody(html)).toContain("正文内容应该保留在同一标签");
+    expect(extractReaderVideos(html, "https://news.example.com/story")).toEqual([
+      { src: "https://news.example.com/media/report.mp4", title: "现场视频", kind: "direct" },
+      { src: "https://www.youtube.com/embed/abc123", title: "公开视频", kind: "embed" },
+    ]);
+  });
+
+  it("keeps social video metadata and prefers an identified content area over surrounding navigation", () => {
+    const html = '<nav>无关导航</nav><section id="article-content"><h1>报道正文</h1><p>这里是更聚焦的正文。</p></section><meta property="og:video" content="/media/preview.m3u8">';
+    expect(extractReaderBody(html)).toContain("这里是更聚焦的正文");
+    expect(extractReaderVideos(html, "https://example.com/report")).toEqual([
+      { src: "https://example.com/media/preview.m3u8", title: "网页视频", kind: "direct" },
     ]);
   });
 });

@@ -56,12 +56,12 @@ export function resolveBrowserVideo(url: string): BrowserVideoSource | null {
       const id = parsed.pathname.split("/").filter(Boolean)[0];
       return id ? { kind: "embed", src: `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0`, title: "YouTube 视频", provider: "YouTube" } : null;
     }
-    if (host.endsWith("youtube.com")) {
+    if (host.endsWith("youtube.com") || host.endsWith("youtube-nocookie.com")) {
       const id = parsed.searchParams.get("v") ?? parsed.pathname.match(/\/(?:shorts|embed)\/([^/?#]+)/)?.[1];
       return id ? { kind: "embed", src: `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0`, title: "YouTube 视频", provider: "YouTube" } : null;
     }
     if (host.endsWith("bilibili.com")) {
-      const id = parsed.pathname.match(/\/video\/(BV[\w-]+|av\d+)/i)?.[1];
+      const id = parsed.pathname.match(/\/video\/(BV[\w-]+|av\d+)/i)?.[1] ?? parsed.searchParams.get("bvid") ?? (parsed.searchParams.get("aid") ? `av${parsed.searchParams.get("aid")}` : null);
       if (!id) return null;
       const parameter = /^av/i.test(id) ? `aid=${id.slice(2)}` : `bvid=${id}`;
       return { kind: "embed", src: `https://player.bilibili.com/player.html?${parameter}&autoplay=1`, title: "Bilibili 视频", provider: "Bilibili" };

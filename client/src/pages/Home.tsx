@@ -1126,6 +1126,18 @@ export default function Home() {
     setVideoError(null);
   };
 
+  const openWebInCurrentTab = (url: string, title?: string) => {
+    const nextUrl = normalizeUrl(url);
+    const videoSource = resolveBrowserVideo(nextUrl);
+    updateActiveBrowserTab((tab) => {
+      const route: BrowserRoute = { url: nextUrl, address: nextUrl, title: title || videoSource?.title || labelFromUrl(nextUrl), mode: videoSource ? "video" : "web", videoSource: videoSource ?? undefined };
+      return { ...appendBrowserRoute(tab, route, videoSource?.kind === "restricted" ? false : true), videoSource: videoSource ?? undefined };
+    });
+    setBrowserFallbackNotice("");
+    setReaderLinkFilter("");
+    setVideoError(null);
+  };
+
   const resumeRecentVideo = (item: RecentVideo) => {
     const videoSource = resolveBrowserVideo(item.url);
     if (!videoSource) { openInReader(item.url, item.title); return; }
@@ -1185,13 +1197,7 @@ export default function Home() {
 
   const navigateBrowser = (value: string) => {
     if (looksLikeSearch(value)) { void fetchBrowserSearch(value); return; }
-    const nextUrl = normalizeUrl(value);
-    const videoSource = resolveBrowserVideo(nextUrl);
-    updateActiveBrowserTab((tab) => {
-      const route: BrowserRoute = { url: nextUrl, address: nextUrl, title: videoSource?.title ?? `阅读：${labelFromUrl(nextUrl)}`, mode: videoSource ? "video" : "reader", videoSource: videoSource ?? undefined };
-      return { ...appendBrowserRoute(tab, route, videoSource?.kind === "restricted" ? false : true), videoSource: videoSource ?? undefined };
-    });
-    setVideoError(null);
+    openWebInCurrentTab(value);
   };
 
   const openReaderMode = () => {
@@ -1239,7 +1245,17 @@ export default function Home() {
     setMediaZoom(100);
   };
 
-  const openBrowserSearchResult = (result: BrowserSearchResult) => openInReader(result.url, result.title);
+  const openBrowserSearchResult = (result: BrowserSearchResult) => openWebInCurrentTab(result.url, result.title);
+
+  const openReaderVideo = (src: string, title: string) => {
+    const source = resolveBrowserVideo(src);
+    if (source) {
+      updateActiveBrowserTab((tab) => appendBrowserRoute(tab, { url: src, address: src, title: title || source.title, mode: "video", videoSource: source }, true));
+      setVideoError(null);
+      return;
+    }
+    openWebInCurrentTab(src, title);
+  };
 
   const stepBrowserHistory = (direction: -1 | 1) => {
     updateActiveBrowserTab((tab) => {
@@ -1655,15 +1671,15 @@ export default function Home() {
                   ) : activeBrowserTab.mode === "reader" ? (
                     <section className="browser-reader-page">
                       <header>
-                        <div><span className="eyebrow">当前标签 · 兼容阅读</span><h2>{readerQuery.data?.title || activeBrowserTab.title}</h2><p>{labelFromUrl(activeBrowserTab.url)} · 已将可读取内容与链接保留在系统内。</p></div>
-                        <div className="reader-actions"><button onClick={saveCurrentDownload}><Download size={14} /> 保存到下载项</button><button onClick={openDirectMode}>尝试直连</button></div>
+                        <div><span className="eyebrow">当前标签 · 多媒体阅读</span><h2>{readerQuery.data?.title || activeBrowserTab.title}</h2><p>{labelFromUrl(activeBrowserTab.url)} · 正文、公开图片和可识别视频都保留在此标签。</p></div>
+                        <div className="reader-actions"><button onClick={saveCurrentDownload}><Download size={14} /> 保存到下载项</button><button onClick={openDirectMode}>原网页</button></div>
                       </header>
                       <p className="reader-safety-note"><CircleHelp size={12} /> {browserFallbackNotice || "优先提供可点击的公开内容；若网站要求登录、人机验证或拒绝嵌入，内容会继续留在此标签的阅读模式中，无法绕过该站点的安全策略。"}</p>
-                      {readerQuery.isLoading || readerQuery.isFetching ? <div className="browser-reader-loading"><RotateCw className="spinning" size={18} /> 正在读取网页内容…</div> : readerQuery.error ? <div className="browser-reader-error"><CircleHelp size={18} /><strong>此网页暂时无法读取</strong><span>{readerQuery.error.message}</span><button onClick={openDirectMode}>改为直连尝试</button></div> : <div className="browser-reader-content"><p className="reader-summary">{readerQuery.data?.summary}</p>{readerQuery.data?.images.length ? <div className="reader-media"><div><h3>页面图片</h3><span>{readerQuery.data.images.length} 张公开图片 · 点击在当前标签查看</span></div><div className="reader-media-grid">{readerQuery.data.images.map((image, index) => <button key={image.src} onClick={() => openReaderImage(index)}><img src={image.src} alt={image.alt} /><span>{image.alt}</span></button>)}</div></div> : null}<div className="reader-links"><div className="reader-links-head"><div><h3>站内可点击导航</h3><small>已提取 {readerQuery.data?.links.length ?? 0} 个公开链接；点击后会在当前标签继续打开。</small></div><input value={readerLinkFilter} onChange={(event) => setReaderLinkFilter(event.target.value)} placeholder="在本页查找标题或网址" aria-label="筛选站内链接" /></div>{visibleReaderLinks.length ? visibleReaderLinks.map((link) => <button key={`${link.url}-${link.title}`} onClick={() => openInReader(link.url, link.title)}><Globe2 size={14} /><span><b>{link.title}</b><small>{labelFromUrl(link.url)}</small></span><ChevronRight size={15} /></button>) : <p>{readerQuery.data?.links.length ? "没有匹配的站内链接。" : "没有检测到可继续访问的公开链接。"}</p>}</div></div>}
+                      {readerQuery.isLoading || readerQuery.isFetching ? <div className="browser-reader-loading"><RotateCw className="spinning" size={18} /> 正在读取网页内容…</div> : readerQuery.error ? <div className="browser-reader-error"><CircleHelp size={18} /><strong>此网页暂时无法读取</strong><span>{readerQuery.error.message}</span><button onClick={openDirectMode}>改为原网页尝试</button></div> : <div className="browser-reader-content"><p className="reader-summary">{readerQuery.data?.summary}</p><article className="reader-body"><h3>网页正文</h3><p>{readerQuery.data?.body}</p></article>{readerQuery.data?.videos.length ? <div className="reader-videos"><div><h3>页面视频</h3><span>{readerQuery.data.videos.length} 个公开视频 · 点击在当前标签播放</span></div><div>{readerQuery.data.videos.map((video) => <button key={video.src} onClick={() => openReaderVideo(video.src, video.title)}><Play size={16} /><span><b>{video.title}</b><small>{video.kind === "direct" ? "公开直链视频" : "官方嵌入视频"}</small></span><ChevronRight size={15} /></button>)}</div></div> : null}{readerQuery.data?.images.length ? <div className="reader-media"><div><h3>页面图片</h3><span>{readerQuery.data.images.length} 张公开图片 · 点击在当前标签查看</span></div><div className="reader-media-grid">{readerQuery.data.images.map((image, index) => <button key={image.src} onClick={() => openReaderImage(index)}><img src={image.src} alt={image.alt} /><span>{image.alt}</span></button>)}</div></div> : null}<div className="reader-links"><div className="reader-links-head"><div><h3>站内可点击导航</h3><small>已提取 {readerQuery.data?.links.length ?? 0} 个公开链接；点击后优先加载原网页，受限时自动返回当前标签的多媒体阅读。</small></div><input value={readerLinkFilter} onChange={(event) => setReaderLinkFilter(event.target.value)} placeholder="在本页查找标题或网址" aria-label="筛选站内链接" /></div>{visibleReaderLinks.length ? visibleReaderLinks.map((link) => <button key={`${link.url}-${link.title}`} onClick={() => openWebInCurrentTab(link.url, link.title)}><Globe2 size={14} /><span><b>{link.title}</b><small>{labelFromUrl(link.url)}</small></span><ChevronRight size={15} /></button>) : <p>{readerQuery.data?.links.length ? "没有匹配的站内链接。" : "没有检测到可继续访问的公开链接。"}</p>}</div></div>}
                     </section>
                   ) : activeBrowserTab.mode === "search" ? (
                     <section className="browser-search-page"><header><span className="eyebrow">Freshdesk Search</span><h2>{activeBrowserTab.searchQuery ? `“${activeBrowserTab.searchQuery}”` : "在这里搜索互联网"}</h2><p>{activeBrowserTab.searchError || activeBrowserTab.searchSummary || "输入关键词，搜索结果会保留在当前浏览器窗口中。"}</p></header>{activeBrowserTab.loading ? <div className="browser-search-loading"><RotateCw className="spinning" size={18} /> 正在检索公开结果…</div> : activeBrowserTab.searchResults?.length ? <div className="browser-search-results">{activeBrowserTab.searchResults.map((result) => <button key={`${result.url}-${result.title}`} onClick={() => openBrowserSearchResult(result)}><span className="browser-result-top"><Globe2 size={14} /> {result.source ?? labelFromUrl(result.url)}</span><strong>{result.title}</strong><p>{result.snippet}</p><small>{labelFromUrl(result.url)} · 在当前标签打开</small></button>)}</div> : <div className="browser-search-empty"><Compass size={28} /><strong>{activeBrowserTab.searchQuery ? "没有找到公开结果" : "等待一个搜索词"}</strong><span>{activeBrowserTab.searchQuery ? "换一个更具体的关键词，或直接输入完整网址继续浏览。" : "可输入“163邮箱登录入口”“OpenAI”或完整网址；结果会在当前标签中继续阅读。"}</span>{!activeBrowserTab.searchQuery && <div className="browser-home-bookmarks"><small><Bookmark size={12} /> 快捷书签</small>{bookmarks.length ? <div>{bookmarks.slice(0, 6).map((bookmark) => <button key={bookmark.id} onClick={() => openBookmark(bookmark)}><Globe2 size={14} /><span><b>{bookmark.title}</b><em>{labelFromUrl(bookmark.url)}</em></span></button>)}</div> : <button className="bookmark-home-empty" onClick={() => setBookmarksOpen(true)}>在工具栏点星标收藏常用网页</button>}</div>}</div>}</section>
-                  ) : <><iframe key={`${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 浏览器内容" src={activeBrowserTab.url} sandbox="allow-forms allow-scripts allow-same-origin" referrerPolicy="strict-origin-when-cross-origin" onLoad={() => { setFrameStatus("loaded"); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} onError={() => autoDegradeWebTab("该网页拒绝在窗口中嵌入，已自动切换到当前标签的兼容阅读。公开内容与链接仍可继续浏览。")} /><div className={`browser-frame-note ${frameStatus}`}><CircleHelp size={13} /><span>{frameStatus === "loading" ? "正在连接直连页面；若网站阻止嵌入，会自动切换到当前标签的兼容阅读。" : frameStatus === "restricted" ? "该页面长时间未能嵌入，正在切换到当前标签阅读模式。" : "直连页面已加载；跨站 iframe 不能安全接管页面的 target=_blank 点击。若站内卡片点不开，使用站内导航即可在当前标签继续打开。"}</span><button onClick={() => openInReader(activeBrowserTab.url, `导航：${activeBrowserTab.title}`)}>站内导航</button></div></>}
+                  ) : <><iframe key={`${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`} title="Freshdesk 浏览器内容" src={activeBrowserTab.url} sandbox="allow-forms allow-scripts allow-same-origin" referrerPolicy="strict-origin-when-cross-origin" onLoad={() => { setFrameStatus("loaded"); updateActiveBrowserTab((tab) => ({ ...tab, loading: false })); }} onError={() => autoDegradeWebTab("该网页拒绝在窗口中嵌入，已自动切换到当前标签的多媒体阅读。公开内容与链接仍可继续浏览。")} /><div className={`browser-frame-note ${frameStatus}`}><CircleHelp size={13} /><span>{frameStatus === "loading" ? "正在连接原网页；文字、图片与视频会优先保留在当前标签。若网站阻止嵌入，才会自动切换到多媒体阅读。" : frameStatus === "restricted" ? "该页面长时间未能嵌入，正在切换到当前标签的多媒体阅读。" : "原网页已加载；页面自己的文字、图片与视频保留在当前标签。若某个站内卡片受跨域限制无法接管，可打开多媒体阅读继续浏览。"}</span><button onClick={() => openInReader(activeBrowserTab.url, `阅读：${activeBrowserTab.title}`)}>多媒体阅读</button></div></>}
                   {bookmarksOpen && <aside className="bookmark-drawer"><header><div><Bookmark size={15} /><span>收藏夹</span></div><button aria-label="关闭收藏夹" onClick={() => setBookmarksOpen(false)}><X size={14} /></button></header>{bookmarks.length ? <div className="bookmark-list">{bookmarks.map((bookmark) => <button key={bookmark.id} onClick={() => openBookmark(bookmark)}><Globe2 size={14} /><span><b>{bookmark.title}</b><small>{labelFromUrl(bookmark.url)}</small></span></button>)}</div> : <div className="bookmark-empty"><Bookmark size={18} /><span>还没有收藏的页面</span></div>}</aside>}
                   {historyOpen && <aside className="bookmark-drawer browser-history-drawer"><header><div><History size={15} /><span>浏览历史</span></div><button aria-label="关闭浏览历史" onClick={() => setHistoryOpen(false)}><X size={14} /></button></header>{browserHistoryEntries.length ? <div className="bookmark-list">{browserHistoryEntries.map((entry) => <button key={entry.id} onClick={() => entry.mode === "search" ? void fetchBrowserSearch(entry.address.replace(/^search:/, "")) : entry.mode === "reader" ? openInReader(entry.address, entry.title) : navigateBrowser(entry.address)}><History size={14} /><span><b>{entry.title}</b><small>{entry.visitedAt} · {labelFromUrl(entry.address.replace(/^search:/, ""))}</small></span></button>)}</div> : <div className="bookmark-empty"><History size={18} /><span>还没有浏览记录</span></div>}<footer><button onClick={() => setBrowserHistoryEntries([])}>清除历史记录</button></footer></aside>}
                   {recentVideosOpen && <aside className="bookmark-drawer browser-history-drawer"><header><div><Play size={15} /><span>最近播放</span></div><button aria-label="关闭最近播放" onClick={() => setRecentVideosOpen(false)}><X size={14} /></button></header>{recentVideos.length ? <div className="bookmark-list">{recentVideos.map((item) => <button key={item.id} onClick={() => resumeRecentVideo(item)}><Play size={14} /><span><b>{item.title}</b><small>{item.provider} · {item.watchedAt}</small></span></button>)}</div> : <div className="bookmark-empty"><Play size={18} /><span>播放过的视频会出现在这里</span></div>}<footer><button onClick={() => setRecentVideos([])}>清空最近播放</button></footer></aside>}

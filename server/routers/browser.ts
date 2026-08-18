@@ -5,6 +5,7 @@ import { publicProcedure, router } from "../_core/trpc";
 
 type ReaderLink = { title: string; url: string };
 type ReaderImage = { src: string; alt: string };
+type ReaderVideo = { src: string; title: string; kind: "direct" | "embed" };
 
 const browserInput = z.object({ url: z.string().trim().min(1).max(2048) });
 const searchInput = z.object({ query: z.string().trim().min(1).max(240) });
@@ -94,7 +95,7 @@ function attributeFromTag(tag: string, name: string) {
   return tag.match(expression)?.[1] ?? "";
 }
 
-export function extractReaderImages(html: string, baseUrl: string, maximum = 10) {
+export function extractReaderImages(html: string, baseUrl: string, maximum = 20) {
   const images: ReaderImage[] = [];
   const seen = new Set<string>();
   const add = (rawSrc: string, rawAlt = "") => {
@@ -119,6 +120,47 @@ export function extractReaderImages(html: string, baseUrl: string, maximum = 10)
     if (images.length >= maximum) break;
   }
   return images;
+}
+
+export function extractReaderVideos(html: string, baseUrl: string, maximum = 10) {
+  const videos: ReaderVideo[] = [];
+  const seen = new Set<string>();
+  const add = (rawSrc: string, title: string, kind: ReaderVideo["kind"]) => {
+    const src = absoluteUrl(decodeEntities(rawSrc), baseUrl);
+    if (!src || seen.has(src)) return;
+    seen.add(src);
+    videos.push({ src, title: textFromHtml(decodeEntities(title)).slice(0, 120) || "网页视频", kind });
+  };
+  for (const match of Array.from(html.matchAll(/<meta\b[^>]*>/gi))) {
+    const tag = match[0];
+    const property = attributeFromTag(tag, "property").toLowerCase() || attributeFromTag(tag, "name").toLowerCase();
+    const src = attributeFromTag(tag, "content");
+    if (/^(?:og:video(?::url)?|twitter:player:stream)$/i.test(property) && src) {
+      add(src, attributeFromTag(tag, "title") || "网页视频", /\.(?:mp4|webm|ogg|ogv|m4v|mov|m3u8)(?:$|[?#])/i.test(src) ? "direct" : "embed");
+    }
+    if (videos.length >= maximum) return videos;
+  }
+  for (const match of Array.from(html.matchAll(/<(?:video|source)\b[^>]*>/gi))) {
+    const tag = match[0];
+    const src = attributeFromTag(tag, "src") || attributeFromTag(tag, "data-src");
+    if (/\.(?:mp4|webm|ogg|ogv|m4v|mov|m3u8)(?:$|[?#])/i.test(src)) add(src, attributeFromTag(tag, "title") || attributeFromTag(tag, "aria-label"), "direct");
+    if (videos.length >= maximum) return videos;
+  }
+  for (const match of Array.from(html.matchAll(/<iframe\b[^>]*>/gi))) {
+    const tag = match[0];
+    const src = attributeFromTag(tag, "src") || attributeFromTag(tag, "data-src");
+    if (/(?:youtube(?:-nocookie)?\.com\/(?:embed|watch)|youtu\.be\/|player\.vimeo\.com|player\.bilibili\.com|tiktok\.com\/player\/v1|player\.youku\.com|player\.twitch\.tv|dailymotion\.com\/embed|wistia\.net\/embed|archive\.org\/embed)/i.test(src)) add(src, attributeFromTag(tag, "title") || attributeFromTag(tag, "aria-label"), "embed");
+    if (videos.length >= maximum) return videos;
+  }
+  return videos;
+}
+
+export function extractReaderBody(html: string, maximum = 6200) {
+  const article = html.match(/<(?:article|main)\b[^>]*>([\s\S]*?)<\/(?:article|main)>/i)?.[1]
+    ?? html.match(/<(?:div|section)\b[^>]*(?:id|class)=["'][^"']*\b(?:main|content|article|post|entry)\b[^"']*["'][^>]*>([\s\S]*?)<\/(?:div|section)>/i)?.[1]
+    ?? html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1]
+    ?? html;
+  return textFromHtml(article).slice(0, maximum) || "该网页没有可提取的正文内容。";
 }
 
 export function enrichBilibiliVideoTitles(links: ReaderLink[], images: ReaderImage[]) {
@@ -204,15 +246,17 @@ export const browserRouter = router({
     const parsed = safeBrowserUrl(input.url);
     try {
       const { html, finalUrl } = await fetchHtml(parsed.toString());
-      const text = textFromHtml(html);
       const images = extractReaderImages(html, finalUrl);
+      const videos = extractReaderVideos(html, finalUrl);
       const links = enrichBilibiliVideoTitles(extractReaderLinks(html, finalUrl, 80), images);
       return {
         url: finalUrl,
         title: titleFromHtml(html),
-        summary: text.slice(0, 1100) || "该网页没有可提取的文本内容。",
+        summary: extractReaderBody(html, 1100),
+        body: extractReaderBody(html),
         links,
         images,
+        videos,
       };
     } catch (error) {
       throw new TRPCError({ code: "BAD_GATEWAY", message: error instanceof Error ? error.message : "暂时无法读取该网页。" });
