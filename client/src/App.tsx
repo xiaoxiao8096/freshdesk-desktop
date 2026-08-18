@@ -19,14 +19,16 @@ function Router() {
 }
 
 export default function App() {
+  const [desktopRecoveryEpoch, setDesktopRecoveryEpoch] = useState(0);
   return (
-    <ErrorBoundary>
+    <ErrorBoundary onRecover={() => setDesktopRecoveryEpoch((value) => value + 1)}>
       <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
           <Toaster />
-          <Router />
+          <Router key={desktopRecoveryEpoch} />
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>
   );
 }
+import { useState } from "react";

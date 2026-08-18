@@ -1,7 +1,7 @@
 /**
  * 设计提醒：雾面硬件主义。以桌面空间关系组织内容，所有反馈要像精密设备一样安静、迅速、可信。
  */
-import { useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { createElement, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
 import { searchVirtualFiles } from "@/lib/finderSearch";
 import { appendNavigationRoute } from "@/lib/browserNavigation";
@@ -9,8 +9,9 @@ import { resolveBrowserVideo, type BrowserVideoSource } from "@/lib/browserVideo
 import { postTikTokPlayerCommand, type TikTokPlayerCommand } from "@/lib/tiktokPlayer";
 import { HlsVideoPlayer } from "@/components/HlsVideoPlayer";
 import { NativeVideoPlayer } from "@/components/NativeVideoPlayer";
-import { closeAllWindows, closeWindowById, minimizeAllWindows, orderWindowsByZIndex, sanitizeRestoredWindows, topVisibleWindow } from "@/lib/windowState";
+import { bringWindowToFront, clampRestoredWindowBounds, closeAllWindows, closeWindowById, minimizeAllWindows, nextVisibleWindowAfterAction, orderWindowsByZIndex, sanitizeRestoredWindows, topVisibleWindow } from "@/lib/windowState";
 import { recordRecentVideo } from "@/lib/recentVideos";
+import { loadStoredSnapshot } from "@/lib/desktopSnapshot";
 import {
   Archive,
   ArrowLeft,
@@ -315,14 +316,7 @@ const initialFileContents: Record<string, string> = {
 };
 
 function loadDesktopSnapshot(): DesktopSnapshot | null {
-  try {
-    const raw = window.localStorage.getItem(DESKTOP_STATE_KEY);
-    if (!raw) return null;
-    const snapshot = JSON.parse(raw) as DesktopSnapshot;
-    return snapshot && typeof snapshot === "object" ? snapshot : null;
-  } catch {
-    return null;
-  }
+  return loadStoredSnapshot<DesktopSnapshot>(typeof window === "undefined" ? null : window.localStorage, DESKTOP_STATE_KEY);
 }
 
 const weatherLocations: WeatherLocation[] = [
@@ -422,6 +416,10 @@ function normalizeBrowserHistory(history: unknown, fallbackUrl: string, fallback
     return [{ url, address: candidate.address ?? url, title: candidate.title ?? labelFromUrl(url), mode }];
   });
   return routes.length ? routes : [{ url: fallbackUrl, address: fallbackUrl === "about:blank" ? "" : fallbackUrl, title: labelFromUrl(fallbackUrl), mode: fallbackUrl === "about:blank" ? "search" : fallbackMode }];
+}
+
+function clampRestoredWindow(windowItem: AppWindow): AppWindow {
+  return { ...windowItem, bounds: clampRestoredWindowBounds(windowItem.bounds, window.innerWidth, window.innerHeight), restoreBounds: windowItem.restoreBounds ? { ...windowItem.restoreBounds } : undefined };
 }
 
 function detectSnapTarget(clientX: number, clientY: number, viewportWidth: number, viewportHeight: number): SnapTarget | null {
@@ -546,8 +544,10 @@ function WindowChrome({
   return (
     <section
       className={`app-window ${className} ${appWindow.maximized ? "is-maximized" : ""}`}
+      data-app-window={appWindow.id}
       style={{ left: appWindow.bounds.x, top: appWindow.bounds.y, width: appWindow.bounds.width, height: appWindow.bounds.height }}
       onMouseDown={onFocus}
+      tabIndex={-1}
       aria-label={`${title} 窗口`}
     >
       <header
@@ -589,7 +589,8 @@ export default function Home() {
     try { return window.localStorage.getItem("freshdesk.setup-complete") === "true"; } catch { return false; }
   });
   const [showSetupChoice, setShowSetupChoice] = useState(false);
-  const [windows, setWindows] = useState<AppWindow[]>(() => sanitizeRestoredWindows(restoredDesktopState?.windows));
+  const [windows, setWindows] = useState<AppWindow[]>(() => sanitizeRestoredWindows(restoredDesktopState?.windows).map(clampRestoredWindow));
+  const [activeWindowId, setActiveWindowId] = useState<AppName | null>(() => topVisibleWindow(sanitizeRestoredWindows(restoredDesktopState?.windows).map(clampRestoredWindow))?.id ?? null);
   const [activePanel, setActivePanel] = useState<"control" | "spotlight" | "calendar" | "about" | "windows" | null>(null);
   const [selectedDesktop, setSelectedDesktop] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
@@ -688,6 +689,9 @@ export default function Home() {
   const terminalOutputRef = useRef<HTMLDivElement | null>(null);
   const nativeVideoRef = useRef<HTMLVideoElement | null>(null);
   const tiktokPlayerRef = useRef<HTMLIFrameElement | null>(null);
+  const electronWebviewRef = useRef<HTMLElement | null>(null);
+  const desktopSnapshotRef = useRef<DesktopSnapshot | null>(restoredDesktopState);
+  const isElectronDesktop = typeof window !== "undefined" && window.freshdeskDesktop?.isElectron === true;
 
   const tracks = useMemo(
     () => [
@@ -714,7 +718,7 @@ export default function Home() {
   }, [finderPath, finderSearch, finderSearchScope, virtualFileSystem.files]);
   const visibleFinderEntries = finderSearch.trim() ? finderSearchResults : finderEntries;
   const readerInput = useMemo(() => ({ url: /^https?:\/\//i.test(activeBrowserTab?.url ?? "") ? activeBrowserTab.url : "https://example.com" }), [activeBrowserTab?.url]);
-  const readerQuery = trpc.browser.readPage.useQuery(readerInput, { enabled: activeBrowserTab?.mode === "reader" });
+  const readerQuery = trpc.browser.readPage.useQuery(readerInput, { enabled: activeBrowserTab?.mode === "reader", retry: false, refetchOnWindowFocus: false });
   const embedInspectionQuery = trpc.browser.inspectEmbed.useQuery(readerInput, { enabled: activeBrowserTab?.mode === "web", retry: false, staleTime: 60_000 });
   const browserUtils = trpc.useUtils();
   const videoReportMutation = trpc.videoReports.submit.useMutation({
@@ -873,13 +877,42 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    const activeStillVisible = activeWindowId && windows.some((windowItem) => windowItem.id === activeWindowId && !windowItem.minimized);
+    if (!activeStillVisible) setActiveWindowId(topVisibleWindow(windows)?.id ?? null);
+  }, [activeWindowId, windows]);
+
+  useEffect(() => {
+    if (!activeWindowId) return;
+    const frame = window.requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-app-window="${activeWindowId}"]`)?.focus({ preventScroll: true }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeWindowId, windows]);
+
+  useEffect(() => {
     try { window.localStorage.setItem("freshdesk.setup-complete", String(setupComplete)); } catch { /* local storage may be disabled */ }
   }, [setupComplete]);
 
   useEffect(() => {
     const snapshot: DesktopSnapshot = { setupComplete, windows, activeWallpaperId, customWallpapers, notes, activeNoteId, virtualFileSystem, fileContents, trashItems, finderPath, systemAppearance, volume, currentTrack, browserTabs, activeBrowserTabId, browserTabGroups, bookmarks, browserHistoryEntries, browserDownloads, recentVideos, videoPlaybackReports, editorPath, editorDraft, calendarEntries, reminders, weatherUnit };
-    try { window.localStorage.setItem(DESKTOP_STATE_KEY, JSON.stringify(snapshot)); } catch { /* storage may be unavailable */ }
+    desktopSnapshotRef.current = snapshot;
+    const timer = window.setTimeout(() => {
+      try { window.localStorage.setItem(DESKTOP_STATE_KEY, JSON.stringify(snapshot)); } catch { /* storage may be unavailable */ }
+    }, 320);
+    return () => window.clearTimeout(timer);
   }, [setupComplete, windows, activeWallpaperId, customWallpapers, notes, activeNoteId, virtualFileSystem, fileContents, trashItems, finderPath, systemAppearance, volume, currentTrack, browserTabs, activeBrowserTabId, browserTabGroups, bookmarks, browserHistoryEntries, browserDownloads, recentVideos, videoPlaybackReports, editorPath, editorDraft, calendarEntries, reminders, weatherUnit]);
+
+  useEffect(() => {
+    const flushSnapshot = () => {
+      if (!desktopSnapshotRef.current) return;
+      try { window.localStorage.setItem(DESKTOP_STATE_KEY, JSON.stringify(desktopSnapshotRef.current)); } catch { /* storage may be unavailable */ }
+    };
+    const flushOnHidden = () => { if (document.visibilityState === "hidden") flushSnapshot(); };
+    window.addEventListener("pagehide", flushSnapshot);
+    document.addEventListener("visibilitychange", flushOnHidden);
+    return () => {
+      window.removeEventListener("pagehide", flushSnapshot);
+      document.removeEventListener("visibilitychange", flushOnHidden);
+    };
+  }, []);
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume / 100;
@@ -956,9 +989,49 @@ export default function Home() {
   useEffect(() => {
     if (!activeBrowserTab || activeBrowserTab.mode !== "web") { setFrameStatus("idle"); return; }
     setFrameStatus("loading");
-    const timeout = window.setTimeout(() => setFrameStatus((status) => status === "loading" ? "restricted" : status), 6500);
+    const timeout = window.setTimeout(() => setFrameStatus((status) => status === "loading" ? "restricted" : status), isElectronDesktop ? 12_000 : 6_500);
     return () => window.clearTimeout(timeout);
-  }, [activeBrowserTab?.id, activeBrowserTab?.mode, activeBrowserTab?.reloadNonce, activeBrowserTab?.url]);
+  }, [activeBrowserTab?.id, activeBrowserTab?.mode, activeBrowserTab?.reloadNonce, activeBrowserTab?.url, isElectronDesktop]);
+
+  useEffect(() => {
+    if (!isElectronDesktop || !activeBrowserTab || activeBrowserTab.mode !== "web") return;
+    const webview = electronWebviewRef.current as (HTMLElement & { getURL?: () => string; getTitle?: () => string }) | null;
+    if (!webview) return;
+    const tabId = activeBrowserTab.id;
+    const syncGuestRoute = () => {
+      const url = webview.getURL?.();
+      if (!url || !/^https?:\/\//i.test(url)) return;
+      const title = webview.getTitle?.() || labelFromUrl(url);
+      setBrowserTabs((tabs) => tabs.map((tab) => {
+        if (tab.id !== tabId || tab.mode !== "web") return tab;
+        if (tab.url === url) return { ...tab, title, address: url, loading: false };
+        return appendBrowserRoute(tab, { url, address: url, title, mode: "web" }, false);
+      }));
+      setFrameStatus("loaded");
+    };
+    const syncGuestTitle = (event: Event) => {
+      const title = (event as CustomEvent<{ title?: string }>).detail?.title;
+      if (!title) return;
+      setBrowserTabs((tabs) => tabs.map((tab) => tab.id === tabId && tab.mode === "web" ? { ...tab, title } : tab));
+    };
+    const failGuestLoad = () => {
+      setBrowserTabs((tabs) => tabs.map((tab) => tab.id === tabId && tab.mode === "web" ? appendBrowserRoute(tab, { url: tab.url, address: tab.url, title: `阅读：${tab.title}`, mode: "reader" }) : tab));
+      setBrowserFallbackNotice("该网页在桌面 Chromium 视图中未能完成加载，已切换到当前标签的多媒体阅读。不会跳出应用。");
+      setFrameStatus("idle");
+    };
+    webview.addEventListener("did-finish-load", syncGuestRoute);
+    webview.addEventListener("did-navigate", syncGuestRoute);
+    webview.addEventListener("did-navigate-in-page", syncGuestRoute);
+    webview.addEventListener("page-title-updated", syncGuestTitle);
+    webview.addEventListener("did-fail-load", failGuestLoad);
+    return () => {
+      webview.removeEventListener("did-finish-load", syncGuestRoute);
+      webview.removeEventListener("did-navigate", syncGuestRoute);
+      webview.removeEventListener("did-navigate-in-page", syncGuestRoute);
+      webview.removeEventListener("page-title-updated", syncGuestTitle);
+      webview.removeEventListener("did-fail-load", failGuestLoad);
+    };
+  }, [activeBrowserTab?.id, activeBrowserTab?.mode, activeBrowserTab?.reloadNonce, activeBrowserTab?.url, isElectronDesktop]);
 
   useEffect(() => {
     if (!activeBrowserTab || activeBrowserTab.mode !== "web" || frameStatus !== "restricted") return;
@@ -977,10 +1050,8 @@ export default function Home() {
   }, [activeBrowserTab?.id, activeBrowserTab?.mode, embedInspectionQuery.data?.canEmbed, embedInspectionQuery.data?.reason]);
 
   const bringToFront = (id: AppName) => {
-    setWindows((currentWindows) => {
-      const top = Math.max(25, ...currentWindows.map((item) => item.zIndex));
-      return currentWindows.map((item) => (item.id === id ? { ...item, minimized: false, zIndex: top + 1 } : item));
-    });
+    setActiveWindowId(id);
+    setWindows((currentWindows) => bringWindowToFront(currentWindows, id));
   };
 
   const updateWindowBounds = (id: AppName, bounds: WindowBounds) => {
@@ -1024,6 +1095,7 @@ export default function Home() {
 
   const openApp = (id: AppName) => {
     setActivePanel(null);
+    setActiveWindowId(id);
     setWindows((currentWindows) => {
       const top = Math.max(25, ...currentWindows.map((item) => item.zIndex));
       const existing = currentWindows.find((item) => item.id === id);
@@ -1032,9 +1104,17 @@ export default function Home() {
     });
   };
 
-  const closeApp = (id: AppName) => setWindows((currentWindows) => closeWindowById(currentWindows, id));
-  const minimizeApp = (id: AppName) => setWindows((currentWindows) => currentWindows.map((item) => item.id === id ? { ...item, minimized: true } : item));
-  const closeAllApps = () => { setWindows((currentWindows) => closeAllWindows<typeof currentWindows[number]>()); setActivePanel(null); };
+  const closeApp = (id: AppName) => setWindows((currentWindows) => {
+    const nextActive = nextVisibleWindowAfterAction(currentWindows, id, "close");
+    if (activeWindowId === id) setActiveWindowId(nextActive?.id ?? null);
+    return closeWindowById(currentWindows, id);
+  });
+  const minimizeApp = (id: AppName) => setWindows((currentWindows) => {
+    const nextActive = nextVisibleWindowAfterAction(currentWindows, id, "minimize");
+    if (activeWindowId === id) setActiveWindowId(nextActive?.id ?? null);
+    return currentWindows.map((item) => item.id === id ? { ...item, minimized: true } : item);
+  });
+  const closeAllApps = () => { setWindows((currentWindows) => closeAllWindows<typeof currentWindows[number]>()); setActiveWindowId(null); setActivePanel(null); };
   const minimizeAllApps = () => setWindows((currentWindows) => minimizeAllWindows(currentWindows));
 
   const registerNativeVideo = (video: HTMLVideoElement) => {
@@ -1270,6 +1350,11 @@ export default function Home() {
     if (activeBrowserTab?.mode === "media") return;
     if (activeBrowserTab?.mode === "video") { updateActiveBrowserTab((tab) => ({ ...tab, loading: true, reloadNonce: tab.reloadNonce + 1 })); return; }
     if (activeBrowserTab?.mode === "search") { void fetchBrowserSearch(activeBrowserTab.searchQuery ?? activeBrowserTab.address); return; }
+    if (activeBrowserTab?.mode === "reader") {
+      updateActiveBrowserTab((tab) => ({ ...tab, loading: true }));
+      void readerQuery.refetch();
+      return;
+    }
     updateActiveBrowserTab((tab) => ({ ...tab, loading: true, reloadNonce: tab.reloadNonce + 1 }));
   };
 
@@ -1658,6 +1743,7 @@ export default function Home() {
                   <span className="browser-status">{activeBrowserTab.loading ? "正在连接" : "浏览器"}</span>
                 </form>
                 <div className="browser-frame-wrap">
+                  {activeBrowserTab.mode === "web" && isElectronDesktop ? createElement("webview", { key: `${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`, ref: (node: HTMLElement | null) => { electronWebviewRef.current = node; }, className: "browser-webview", src: activeBrowserTab.url, partition: "persist:freshdesk-browser", webpreferences: "contextIsolation=yes, sandbox=yes", allowpopups: "false", onFocus: () => bringToFront("browser") }) : null}
                   {activeBrowserTab.mode === "media" ? (
                     <section className="browser-media-page">
                       <header><div><span className="eyebrow">当前标签 · 图片查看</span><h2>{activeBrowserTab.title}</h2><p>{activeBrowserTab.mediaItems?.length ? `${(activeBrowserTab.mediaIndex ?? 0) + 1} / ${activeBrowserTab.mediaItems.length} · 图片留在当前标签中查看` : "公开图片资源"}</p></div><div className="media-actions"><button onClick={returnToReader}><ArrowLeft size={14} /> 返回文章</button><button onClick={downloadCurrentImage}><Download size={14} /> 下载到 Finder</button><button onClick={() => setMediaZoom((value) => Math.max(60, value - 20))} aria-label="缩小图片"><ZoomOut size={15} /></button><span>{mediaZoom}%</span><button onClick={() => setMediaZoom((value) => Math.min(220, value + 20))} aria-label="放大图片"><ZoomIn size={15} /></button></div></header><div className="browser-media-stage"><button aria-label="上一张图片" disabled={(activeBrowserTab.mediaItems?.length ?? 0) < 2} onClick={() => stepReaderImage(-1)}><ChevronLeft size={22} /></button><figure>{mediaImageError ? <div className="browser-media-error"><CircleHelp size={24} /><strong>图片暂时无法加载</strong><span>{mediaImageError}</span><button onClick={() => setMediaImageError(null)}>重试</button></div> : <img src={activeBrowserTab.url} alt={activeBrowserTab.title} style={{ transform: `scale(${mediaZoom / 100})` }} onError={() => setMediaImageError("该图片来源拒绝了嵌入或暂时不可用。可返回文章继续阅读其他内容。")} />}<figcaption>{activeBrowserTab.title}</figcaption></figure><button aria-label="下一张图片" disabled={(activeBrowserTab.mediaItems?.length ?? 0) < 2} onClick={() => stepReaderImage(1)}><ChevronRight size={22} /></button></div><div className="browser-media-strip">{activeBrowserTab.mediaItems?.map((item, index) => <button key={item.src} className={index === activeBrowserTab.mediaIndex ? "active" : ""} onClick={() => { updateActiveBrowserTab((tab) => ({ ...tab, mediaIndex: index, title: item.alt || "网页图片", address: item.src, url: item.src })); setMediaImageError(null); }}><img src={item.src} alt={item.alt} /></button>)}</div></section>
