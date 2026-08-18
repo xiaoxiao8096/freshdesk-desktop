@@ -1,5 +1,6 @@
 import { app, BrowserWindow, shell } from "electron";
 import { spawn } from "node:child_process";
+import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -7,14 +8,41 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow = null;
 let serverProcess = null;
 
+function startupLog(message) {
+  try {
+    const logDirectory = app.getPath("userData");
+    mkdirSync(logDirectory, { recursive: true });
+    appendFileSync(path.join(logDirectory, "freshdesk-startup.log"), `[${new Date().toISOString()}] ${message}\n`);
+  } catch {
+    // Logging must never prevent the desktop application from opening.
+  }
+}
+
+function showStartupFailure(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  startupLog(`Startup failed: ${message}`);
+  mainWindow = new BrowserWindow({ width: 760, height: 460, backgroundColor: "#0d1424", title: "Freshdesk Desktop — 启动诊断" });
+  const escaped = message.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
+  const logPath = path.join(app.getPath("userData"), "freshdesk-startup.log").replace(/\\/g, "\\\\");
+  void mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><body style="margin:0;background:#0d1424;color:#eaf1ff;font:16px system-ui;padding:42px"><h1>Freshdesk Desktop 未能启动</h1><p>应用已经保留了诊断日志。请将以下内容截图或复制给开发者：</p><pre style="white-space:pre-wrap;background:#151f35;padding:16px;border-radius:10px">${escaped}</pre><p>日志位置：<code>${logPath}</code></p><p>请确认应用已完整解压，且没有从压缩包内部直接运行。</p></body></html>`)}`);
+}
+
 function startEmbeddedServer() {
   const serverEntry = path.join(app.getAppPath(), "dist", "index.js");
   const port = process.env.FRESHDESK_PORT || "49320";
+  startupLog(`Starting local server from ${serverEntry} on port ${port}.`);
 
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Freshdesk 本地服务启动超时。")), 15_000);
+    let resolved = false;
+    const fail = (error) => {
+      if (resolved) return;
+      clearTimeout(timeout);
+      reject(error);
+    };
+    const timeout = setTimeout(() => fail(new Error("Freshdesk 本地服务启动超时。")), 15_000);
+    const { NODE_OPTIONS: _nodeOptions, ELECTRON_RUN_AS_NODE: _runAsNode, ...inheritedEnvironment } = process.env;
     serverProcess = spawn(process.execPath, [serverEntry], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", NODE_ENV: "production", PORT: port },
+      env: { ...inheritedEnvironment, ELECTRON_RUN_AS_NODE: "1", NODE_ENV: "production", PORT: port },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -23,19 +51,29 @@ function startEmbeddedServer() {
       const message = String(chunk);
       const matched = message.match(/Server running on (http:\/\/localhost:\d+)\//);
       if (matched?.[1]) {
+        resolved = true;
         clearTimeout(timeout);
+        startupLog(`Local server ready at ${matched[1]}.`);
         resolve(matched[1]);
       }
     };
 
     serverProcess.stdout.on("data", onOutput);
-    serverProcess.stderr.on("data", (chunk) => console.error("[Freshdesk server]", String(chunk)));
+    serverProcess.stderr.on("data", (chunk) => {
+      const message = String(chunk);
+      startupLog(`Server stderr: ${message.trim()}`);
+      console.error("[Freshdesk server]", message);
+    });
     serverProcess.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
+      startupLog(`Server spawn error: ${error.message}`);
+      fail(error);
     });
     serverProcess.once("exit", (code) => {
-      if (code && code !== 0) console.error(`[Freshdesk server] exited with code ${code}`);
+      if (code !== 0) {
+        const error = new Error(`Freshdesk 本地服务提前退出（代码 ${code ?? "未知"}）。`);
+        startupLog(error.message);
+        fail(error);
+      }
     });
   });
 }
@@ -84,7 +122,7 @@ async function createWindow() {
 
 app.whenReady().then(createWindow).catch((error) => {
   console.error(error);
-  app.quit();
+  showStartupFailure(error);
 });
 
 app.on("window-all-closed", () => {

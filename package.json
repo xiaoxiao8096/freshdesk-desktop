@@ -13,7 +13,7 @@
     "test": "vitest run",
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
     "electron:dev": "ELECTRON_START_URL=http://localhost:3000 electron .",
-    "electron:pack": "pnpm build && electron-builder --win dir --x64 --publish never && cd dist && zip -r -1 \"Freshdesk-Desktop-${npm_package_version}-win-x64-portable.zip\" win-unpacked"
+    "electron:pack": "rm -rf release dist/win-unpacked && rm -f dist/Freshdesk-Desktop-${npm_package_version}-win-x64-portable.zip && pnpm build && electron-builder --win dir --x64 --publish never && cd release && zip -r -1 ../dist/Freshdesk-Desktop-${npm_package_version}-win-x64-portable.zip win-unpacked"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.693.0",
@@ -113,12 +113,15 @@
   "build": {
     "appId": "com.freshdesk.desktop",
     "productName": "Freshdesk Desktop",
-    "asar": true,
+    "asar": false,
     "files": [
       "dist/**",
       "electron/**",
       "package.json"
     ],
+    "directories": {
+      "output": "release"
+    },
     "extraMetadata": {
       "main": "electron/main.mjs"
     },
