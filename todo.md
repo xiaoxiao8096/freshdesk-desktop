@@ -153,3 +153,4 @@
 - [ ] 针对截图所示 Bing 结果页，采集 Electron webview 的 pointer、click、before-input-event、did-frame-navigate、did-navigate、did-create-window 与 console 事件，区分点击未命中与导航被拦截两类根因。
 - [ ] 审计并移除浏览器内容区中任何透明遮罩、错误状态层或 React 捕获事件对 Chromium 网页视图的鼠标命中和焦点传递干扰。
 - [ ] 在 Windows Chromium 调试协议中实际选择 Bing 搜索结果链接并触发点击，验证 URL 改变、页面载入和前进后退状态同步后才发布修复版本。
+- [ ] 将已实机证明有效的 guest 文档捕获阶段 target 链接接管固化为安全预加载实现，并完成 Bing 搜索结果同标签导航回归验证。

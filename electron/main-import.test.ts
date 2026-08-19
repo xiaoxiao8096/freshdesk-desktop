@@ -27,7 +27,10 @@ describe("Electron 主进程依赖加载", () => {
     expect(mainProcessSource).toContain('return { action: "deny" };');
   });
 
-  it("不为 guest 暴露自定义 preload 或 Node 接口", () => {
-    expect(mainProcessSource).toContain("delete guestPreferences.preload;");
+  it("仅为 guest 配置无 Node/Electron 接口的同标签导航预加载，并保留 Chromium 安全边界", () => {
+    expect(mainProcessSource).toContain('guestPreferences.preload = path.join(__dirname, "guest-preload.mjs");');
+    expect(mainProcessSource).toContain("guestPreferences.nodeIntegration = false;");
+    expect(mainProcessSource).toContain("guestPreferences.contextIsolation = true;");
+    expect(mainProcessSource).toContain("guestPreferences.sandbox = true;");
   });
 });
