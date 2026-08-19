@@ -700,7 +700,7 @@ export default function Home() {
   const terminalOutputRef = useRef<HTMLDivElement | null>(null);
   const nativeVideoRef = useRef<HTMLVideoElement | null>(null);
   const tiktokPlayerRef = useRef<HTMLIFrameElement | null>(null);
-  const electronWebviewRef = useRef<HTMLElement | null>(null);
+  const nativeBrowserFrameRef = useRef<HTMLDivElement | null>(null);
   const electronHistoryStepRef = useRef<{ tabId: string; index: number } | null>(null);
   const desktopSnapshotRef = useRef<DesktopSnapshot | null>(restoredDesktopState);
   const isElectronDesktop = typeof window !== "undefined" && window.freshdeskDesktop?.isElectron === true;
@@ -1011,71 +1011,55 @@ export default function Home() {
   }, [activeBrowserTab?.id, activeBrowserTab?.mode, activeBrowserTab?.reloadNonce, activeBrowserTab?.url, isElectronDesktop]);
 
   useEffect(() => {
-    if (!isElectronDesktop || !activeBrowserTab || activeBrowserTab.mode !== "web") return;
-    const webview = electronWebviewRef.current as (HTMLElement & { getURL?: () => string; getTitle?: () => string; reloadIgnoringCache?: () => void }) | null;
-    if (!webview) return;
-    const tabId = activeBrowserTab.id;
-    const syncGuestRoute = () => {
-      const url = webview.getURL?.();
+    if (!isElectronDesktop || !window.freshdeskDesktop?.onNativeBrowserStatus) return;
+    return window.freshdeskDesktop.onNativeBrowserStatus((status) => {
+      if (!status.tabId) return;
+      if (status.type === "loading") { setFrameStatus("loading"); setBrowserTabs((tabs) => tabs.map((tab) => tab.id === status.tabId && tab.mode === "web" ? { ...tab, loading: true } : tab)); return; }
+      if (status.type === "failed") {
+        setFrameStatus("error");
+        setBrowserFallbackNotice(`该网页未能完成加载：${status.message || "未知错误"}。页面仍保留在当前 Chromium 标签中。`);
+        setBrowserTabs((tabs) => tabs.map((tab) => tab.id === status.tabId && tab.mode === "web" ? { ...tab, loading: false } : tab));
+        return;
+      }
+      const url = status.url;
       if (!url || !/^https?:\/\//i.test(url)) return;
-      const title = webview.getTitle?.() || labelFromUrl(url);
+      const title = status.title || labelFromUrl(url);
       setBrowserTabs((tabs) => tabs.map((tab) => {
-        if (tab.id !== tabId || tab.mode !== "web") return tab;
+        if (tab.id !== status.tabId || tab.mode !== "web") return tab;
         const pendingHistoryStep = electronHistoryStepRef.current;
-        if (pendingHistoryStep?.tabId === tabId) {
+        if (pendingHistoryStep?.tabId === status.tabId && status.type === "navigated") {
           electronHistoryStepRef.current = null;
           return synchronizeGuestHistoryStep(tab, pendingHistoryStep, url, title) ?? { ...tab, title, address: url, loading: false };
         }
-        if (tab.url === url) return { ...tab, title, address: url, loading: false };
+        if (status.type === "title") return { ...tab, title };
+        if (tab.url === url) return { ...tab, title, address: url, loading: status.type === "stopped" ? false : tab.loading };
         return appendBrowserRoute(tab, { url, address: url, title, mode: "web" }, false);
       }));
-      setFrameStatus("loaded");
+      if (status.type === "stopped" || status.type === "navigated") setFrameStatus("loaded");
+    });
+  }, [isElectronDesktop]);
+
+  useEffect(() => {
+    const desktop = window.freshdeskDesktop;
+    if (!isElectronDesktop || !desktop) return;
+    const browserWindow = windows.find((item) => item.id === "browser");
+    const shouldShow = Boolean(activeBrowserTab && activeBrowserTab.mode === "web" && browserWindow && !browserWindow.minimized && activeWindowId === "browser");
+    const frame = nativeBrowserFrameRef.current;
+    if (!shouldShow || !frame || !activeBrowserTab) {
+      void desktop.nativeBrowserHide();
+      return;
+    }
+    const updateBounds = () => {
+      const rect = frame.getBoundingClientRect();
+      if (rect.width < 2 || rect.height < 2) return;
+      const bounds = { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) };
+      void desktop.nativeBrowserShow({ tabId: activeBrowserTab.id, url: activeBrowserTab.url, bounds }).catch(() => setBrowserFallbackNotice("原生 Chromium 网页视图暂时不可用。"));
     };
-    const syncGuestTitle = (event: Event) => {
-      const title = (event as CustomEvent<{ title?: string }>).detail?.title;
-      if (!title) return;
-      setBrowserTabs((tabs) => tabs.map((tab) => tab.id === tabId && tab.mode === "web" ? { ...tab, title } : tab));
-    };
-    const startGuestLoad = () => {
-      setBrowserTabs((tabs) => tabs.map((tab) => tab.id === tabId && tab.mode === "web" ? { ...tab, loading: true } : tab));
-      setFrameStatus("loading");
-    };
-    const failGuestLoad = (event: Event) => {
-      const failure = event as Event & { errorCode?: number; isMainFrame?: boolean };
-      if (failure.isMainFrame === false || failure.errorCode === -3) return;
-      setBrowserTabs((tabs) => tabs.map((tab) => tab.id === tabId && tab.mode === "web" ? { ...tab, loading: false } : tab));
-      setBrowserFallbackNotice("该网页未能完成加载，但仍保留在当前 Chromium 标签中。你可以刷新、返回或继续输入其他网址；不会自动改成阅读模式。");
-      setFrameStatus("error");
-    };
-    const routeGuestPopupInCurrentTab = (event: Event) => {
-      const popup = event as Event & { url?: string; detail?: { url?: string }; preventDefault?: () => void };
-      const popupUrl = popup.url ?? popup.detail?.url;
-      if (!popupUrl || !/^https?:\/\//i.test(popupUrl)) return;
-      // 同时在 webview 宿主侧接管 target=_blank/window.open：部分搜索引擎会在
-      // 主进程拒绝新窗口后放弃同步导航，直接由当前 Chromium guest 加载可避免死链。
-      popup.preventDefault?.();
-      const guest = webview as typeof webview & { loadURL?: (url: string) => Promise<void> };
-      window.setTimeout(() => {
-        guest.loadURL?.(popupUrl).catch(() => undefined);
-      }, 0);
-    };
-    webview.addEventListener("did-start-loading", startGuestLoad);
-    webview.addEventListener("did-finish-load", syncGuestRoute);
-    webview.addEventListener("did-navigate", syncGuestRoute);
-    webview.addEventListener("did-navigate-in-page", syncGuestRoute);
-    webview.addEventListener("page-title-updated", syncGuestTitle);
-    webview.addEventListener("did-fail-load", failGuestLoad);
-    webview.addEventListener("new-window", routeGuestPopupInCurrentTab);
-    return () => {
-      webview.removeEventListener("did-finish-load", syncGuestRoute);
-      webview.removeEventListener("did-navigate", syncGuestRoute);
-      webview.removeEventListener("did-navigate-in-page", syncGuestRoute);
-      webview.removeEventListener("page-title-updated", syncGuestTitle);
-      webview.removeEventListener("did-start-loading", startGuestLoad);
-      webview.removeEventListener("did-fail-load", failGuestLoad);
-      webview.removeEventListener("new-window", routeGuestPopupInCurrentTab);
-    };
-  }, [activeBrowserTab?.id, activeBrowserTab?.mode, activeBrowserTab?.reloadNonce, activeBrowserTab?.url, isElectronDesktop]);
+    const observer = new ResizeObserver(updateBounds);
+    observer.observe(frame);
+    updateBounds();
+    return () => observer.disconnect();
+  }, [activeBrowserTab?.id, activeBrowserTab?.mode, activeBrowserTab?.url, activeWindowId, isElectronDesktop, windows]);
 
   useEffect(() => {
     if (!isElectronDesktop || !window.freshdeskDesktop?.onUpdateStatus) return;
@@ -1101,7 +1085,7 @@ export default function Home() {
 
   const focusElectronWebview = () => {
     if (!isElectronDesktop || activeBrowserTab?.mode !== "web") return;
-    window.requestAnimationFrame(() => (electronWebviewRef.current as (HTMLElement & { focus?: () => void }) | null)?.focus?.());
+    window.requestAnimationFrame(() => void window.freshdeskDesktop?.nativeBrowserCommand({ tabId: activeBrowserTab.id, command: "focus" }));
   };
 
   const updateWindowBounds = (id: AppName, bounds: WindowBounds) => {
@@ -1410,12 +1394,10 @@ export default function Home() {
   const stepBrowserHistory = (direction: -1 | 1) => {
     if (isElectronDesktop && activeBrowserTab?.mode === "web") {
       const next = getNavigationStep(activeBrowserTab.history, activeBrowserTab.historyIndex, direction);
-      const webview = electronWebviewRef.current as (HTMLElement & { canGoBack?: () => boolean; canGoForward?: () => boolean; goBack?: () => void; goForward?: () => void }) | null;
-      const canUseGuestHistory = next?.route.mode === "web" && (direction === -1 ? webview?.canGoBack?.() : webview?.canGoForward?.());
-      if (next && canUseGuestHistory) {
+      if (next?.route.mode === "web") {
         electronHistoryStepRef.current = { tabId: activeBrowserTab.id, index: next.index };
         updateActiveBrowserTab((tab) => ({ ...tab, loading: true }));
-        if (direction === -1) webview?.goBack?.(); else webview?.goForward?.();
+        void window.freshdeskDesktop?.nativeBrowserCommand({ tabId: activeBrowserTab.id, command: direction === -1 ? "back" : "forward" });
         return;
       }
     }
@@ -1437,10 +1419,9 @@ export default function Home() {
       return;
     }
     if (isElectronDesktop) {
-      const webview = electronWebviewRef.current as (HTMLElement & { reloadIgnoringCache?: () => void }) | null;
-      if (webview?.reloadIgnoringCache) {
+      if (activeBrowserTab?.mode === "web") {
         updateActiveBrowserTab((tab) => ({ ...tab, loading: true }));
-        webview.reloadIgnoringCache();
+        void window.freshdeskDesktop?.nativeBrowserCommand({ tabId: activeBrowserTab.id, command: "reload" });
         return;
       }
     }
@@ -1893,7 +1874,7 @@ export default function Home() {
                 <div className="browser-content-layout">
                   {browserSidebarOpen && <aside className="browser-safari-sidebar" aria-label="Safari 风格浏览器侧边栏"><header><span>浏览</span><button aria-label="新建标签页" onClick={() => addBrowserTab()}><Plus size={13} /></button></header><section><small>标签组</small><button className={!activeBrowserTab.groupId ? "active" : ""} onClick={() => assignTabToGroup(undefined)}><Globe2 size={14} /><span>起始页</span><em>{browserTabs.length}</em></button>{browserTabGroups.map((group) => <button className={activeBrowserTab.groupId === group.id ? "active" : ""} key={group.id} onClick={() => assignTabToGroup(group.id)}><i style={{ background: group.color }} /><span>{group.title}</span><em>{groupedTabs(group.id).length}</em></button>)}<button className="sidebar-add-group" onClick={createTabGroup}><Plus size={13} /> 新建标签组</button></section><section><small>收藏夹</small>{bookmarks.slice(0, 6).map((bookmark) => <button key={bookmark.id} onClick={() => openBookmark(bookmark)}><Bookmark size={13} /><span>{bookmark.title}</span></button>)}{!bookmarks.length && <span className="browser-sidebar-empty">点星标收藏当前页面</span>}</section><section className="browser-sidebar-history"><small>最近浏览</small>{browserHistoryEntries.slice(0, 5).map((entry) => <button key={entry.id} onClick={() => navigateBrowser(entry.address.replace(/^search:/, ""))}><History size={13} /><span>{entry.title}</span></button>)}</section></aside>}
                 <div className="browser-frame-wrap" onPointerDownCapture={focusElectronWebview}>
-                  {activeBrowserTab.mode === "web" && isElectronDesktop ? createElement("webview", { key: `${activeBrowserTab.id}-${activeBrowserTab.reloadNonce}`, ref: (node: HTMLElement | null) => { electronWebviewRef.current = node; }, className: "browser-webview", src: activeBrowserTab.url, partition: "persist:freshdesk-browser", webpreferences: "contextIsolation=yes, sandbox=yes", allowpopups: "true", tabIndex: 0, onFocus: () => bringToFront("browser"), onDomReady: focusElectronWebview }) : null}
+                  {activeBrowserTab.mode === "web" && isElectronDesktop ? <div ref={nativeBrowserFrameRef} className="browser-webview native-browser-surface" aria-label="原生 Chromium 网页内容" /> : null}
                   {activeBrowserTab.mode === "media" ? (
                     <section className="browser-media-page">
                       <header><div><span className="eyebrow">当前标签 · 图片查看</span><h2>{activeBrowserTab.title}</h2><p>{activeBrowserTab.mediaItems?.length ? `${(activeBrowserTab.mediaIndex ?? 0) + 1} / ${activeBrowserTab.mediaItems.length} · 图片留在当前标签中查看` : "公开图片资源"}</p></div><div className="media-actions"><button onClick={returnToReader}><ArrowLeft size={14} /> 返回文章</button><button onClick={downloadCurrentImage}><Download size={14} /> 下载到 Finder</button><button onClick={() => setMediaZoom((value) => Math.max(60, value - 20))} aria-label="缩小图片"><ZoomOut size={15} /></button><span>{mediaZoom}%</span><button onClick={() => setMediaZoom((value) => Math.min(220, value + 20))} aria-label="放大图片"><ZoomIn size={15} /></button></div></header><div className="browser-media-stage"><button aria-label="上一张图片" disabled={(activeBrowserTab.mediaItems?.length ?? 0) < 2} onClick={() => stepReaderImage(-1)}><ChevronLeft size={22} /></button><figure>{mediaImageError ? <div className="browser-media-error"><CircleHelp size={24} /><strong>图片暂时无法加载</strong><span>{mediaImageError}</span><button onClick={() => setMediaImageError(null)}>重试</button></div> : <img src={activeBrowserTab.url} alt={activeBrowserTab.title} style={{ transform: `scale(${mediaZoom / 100})` }} onError={() => setMediaImageError("该图片来源拒绝了嵌入或暂时不可用。可返回文章继续阅读其他内容。")} />}<figcaption>{activeBrowserTab.title}</figcaption></figure><button aria-label="下一张图片" disabled={(activeBrowserTab.mediaItems?.length ?? 0) < 2} onClick={() => stepReaderImage(1)}><ChevronRight size={22} /></button></div><div className="browser-media-strip">{activeBrowserTab.mediaItems?.map((item, index) => <button key={item.src} className={index === activeBrowserTab.mediaIndex ? "active" : ""} onClick={() => { updateActiveBrowserTab((tab) => ({ ...tab, mediaIndex: index, title: item.alt || "网页图片", address: item.src, url: item.src })); setMediaImageError(null); }}><img src={item.src} alt={item.alt} /></button>)}</div></section>

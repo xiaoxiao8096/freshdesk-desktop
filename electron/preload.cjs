@@ -1,9 +1,11 @@
-import { contextBridge, ipcRenderer, process } from "electron";
+const { contextBridge, ipcRenderer } = require("electron");
+const desktopPlatform = process.platform;
+const electronVersion = process.versions.electron;
 
 contextBridge.exposeInMainWorld("freshdeskDesktop", {
   isElectron: true,
-  platform: process.platform,
-  version: process.versions.electron,
+  platform: desktopPlatform,
+  version: electronVersion,
   nativeBrowserShow: (payload) => ipcRenderer.invoke("freshdesk:native-browser-show", payload),
   nativeBrowserHide: () => ipcRenderer.invoke("freshdesk:native-browser-hide"),
   nativeBrowserBounds: (payload) => ipcRenderer.invoke("freshdesk:native-browser-bounds", payload),

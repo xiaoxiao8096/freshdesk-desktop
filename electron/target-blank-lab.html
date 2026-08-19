@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Freshdesk target=_blank 最小复现</title>
+    <style>
+      body { margin: 0; background: #101726; color: #eef4ff; font: 14px system-ui, sans-serif; }
+      header { display: flex; align-items: center; gap: 12px; padding: 13px 18px; border-bottom: 1px solid #30415e; }
+      strong { color: #91caff; } code { color: #c3d8ff; } #status { margin-left: auto; opacity: .8; }
+      webview { display: inline-flex; width: 100vw; height: calc(100vh - 50px); }
+    </style>
+  </head>
+  <body>
+    <header><strong>Electron 35 target=_blank 最小复现</strong><span>期望：搜索结果在当前 guest 导航</span><code id="status">创建中</code></header>
+    <webview id="guest" src="https://cn.bing.com/search?q=1" allowpopups webpreferences="contextIsolation=yes,sandbox=yes"></webview>
+    <script>
+      const guest = document.querySelector('#guest');
+      const status = document.querySelector('#status');
+      const report = (message) => { status.textContent = message; console.log(`[LAB] ${message}`); };
+      guest.addEventListener('dom-ready', () => report(`guest ready: ${guest.getURL()}`));
+      guest.addEventListener('did-navigate', () => report(`navigated: ${guest.getURL()}`));
+      guest.addEventListener('new-window', (event) => {
+        const url = event.url || event.detail?.url;
+        report(`host new-window: ${url}`);
+        if (!url || !/^https?:/i.test(url)) return;
+        event.preventDefault();
+        guest.loadURL(url).catch((error) => report(`load failed: ${error.message}`));
+      });
+    </script>
+  </body>
+</html>

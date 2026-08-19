@@ -146,14 +146,14 @@
 - [x] 依据 Safari 的桌面浏览信息架构重做浏览器工具栏、标签栏、地址栏、侧边栏与状态反馈，同时保留 Freshdesk 的窗口系统和当前标签浏览策略。
 - [x] 统一 Chromium webview 的地址栏输入、网页表单焦点、站内点击、前进、后退、刷新、下载和标签状态同步逻辑，不以替代渲染模式接管失败网页。
 - [ ] 新增或更新纯 Chromium 与 Safari 风格浏览器的单元测试，完成类型检查、生产构建、Windows 安装包发布和实机验证。
-- [ ] 复现并修复 Electron Chromium 网页视图中搜索引擎结果页点击链接后无法在当前标签继续导航的问题；不以阅读模式、外部浏览器或替代渲染绕过。
+- [x] 复现并修复 Electron Chromium 网页视图中搜索引擎结果页点击链接后无法在当前标签继续导航的问题；不以阅读模式、外部浏览器或替代渲染绕过。Windows 实机验证：Bing 结果真实鼠标点击后当前 Chromium URL 已导航至 baike.baidu.com。
 - [ ] 审计 webview 的新窗口、导航、权限、分区与输入焦点策略，确保站内链接、目标链接和搜索结果均遵循普通浏览器的当前标签或显式新标签行为。
 - [ ] 依据 Apple macOS Human Interface Guidelines 制定系统级视觉与交互规格，统一桌面、菜单栏、Dock、窗口、侧边栏、工具栏、列表、表单与反馈层级。
 - [ ] 按统一 macOS 设计令牌分阶段重构核心桌面外壳和高频应用，补充每项改造的可执行交互测试与 Windows 实机验证。
 - [ ] 针对截图所示 Bing 结果页，采集 Electron webview 的 pointer、click、before-input-event、did-frame-navigate、did-navigate、did-create-window 与 console 事件，区分点击未命中与导航被拦截两类根因。
 - [ ] 审计并移除浏览器内容区中任何透明遮罩、错误状态层或 React 捕获事件对 Chromium 网页视图的鼠标命中和焦点传递干扰。
-- [ ] 在 Windows Chromium 调试协议中实际选择 Bing 搜索结果链接并触发点击，验证 URL 改变、页面载入和前进后退状态同步后才发布修复版本。
-- [ ] 将已实机证明有效的 guest 文档捕获阶段 target 链接接管固化为安全预加载实现，并完成 Bing 搜索结果同标签导航回归验证。
+- [x] 在 Windows Chromium 调试协议中实际选择 Bing 搜索结果链接并触发点击，验证 URL 改变、页面载入和前进后退状态同步后才发布修复版本。已实测：Bing → 百度百科；back 返回 Bing；forward 恢复百度百科。
+- [x] 将已实机证明有效的 guest 文档捕获阶段 target 链接接管固化为安全预加载实现，并完成 Bing 搜索结果同标签导航回归验证。绝对路径 CommonJS guest preload 标记为 active。
 - [ ] 以 Electron 要求的 file: URL 重新配置 guest 预加载，验证预加载就绪标记与 Bing 结果目标链接在正式 Windows 构建中均生效。
 - [ ] 将 webview 预加载由 ESM 扩展名改为 Node require 可加载的 CommonJS 文件，并在 Windows 正式构建验证当前标签目标链接接管。
 - [ ] 同时在 will-attach-webview 的参数与 guest 偏好中声明 file: CommonJS 预加载地址，验证正式 Chromium guest 的预加载就绪标记和目标链接同标签导航。
@@ -162,3 +162,8 @@
 - [ ] 修复 webview 显式 allowpopups=false 覆盖主进程配置的问题，允许受控请求到达隐藏原生窗口接管器并验证同标签导航。
 - [ ] 兼容 webview new-window 事件将 URL 置于 CustomEvent.detail 的 Electron 版本差异，验证渲染层回退接管可从 Bing 结果读取目标并导航当前 guest。
 - [ ] 使用 Electron 主进程 Chromium 调试协议订阅 guest 的 Page.windowOpen 事件，将受控 http/https 目标安全交回当前标签，并完成 Bing 实机导航、前进/后退回归验证。
+- [ ] 停止并清理 Windows v1.0.23 解压替换卡住的部署任务，核验用户 Downloads 目录中实际可运行版本、Chromium 调试端口和内核网页视图状态，再重新选择可完成的安装路径。
+- [ ] 由渲染层已挂载的 Chromium webview 在 dom-ready 后执行受限文档捕获拦截器，验证 Bing target 链接在当前 guest 导航；仅接管无修饰键的 http/https 链接，不暴露 Node/Electron 接口。
+- [ ] 将桌面浏览器内容区从 Electron webview 迁移至主进程 WebContentsView，并通过 IPC 同步地址、标题、加载、边界和当前标签导航；仅在 Bing target 链接 URL 实机改变后替换用户现有 App。
+- [x] 使用 Electron 35.7.5 建立独立最小复现，逐项验证 target=_blank 锚点、window.open、预加载捕获、new-window、setWindowOpenHandler 与当前标签 loadURL 的实际事件序列；仅将实机成功路径集成回 Freshdesk。绝对路径 guest preload 已实机令 Bing 当前 guest URL 改变。
+- [x] 将主窗口 Electron preload 从未生效的 ESM 路径替换为 CommonJS 桥接，并在 Windows 实机确认 window.freshdeskDesktop 存在、浏览器不再回退 iframe、webview guest preload 标记为 active。

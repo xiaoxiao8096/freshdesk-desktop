@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, session, shell, WebContentsView } from "electron";
 import electronUpdater from "electron-updater";
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -9,8 +9,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { autoUpdater } = electronUpdater;
 let mainWindow = null;
 let serverProcess = null;
+let nativeBrowserView = null;
+let nativeBrowserTabId = null;
 const pendingDownloads = new Map();
 const activeDownloads = new Map();
+const NATIVE_BROWSER_PARTITION = "persist:freshdesk-browser";
 
 function sendUpdateStatus(status) {
   mainWindow?.webContents.send("freshdesk:update-status", status);
@@ -20,13 +23,113 @@ function sendDownloadStatus(status) {
   mainWindow?.webContents.send("freshdesk:download-status", status);
 }
 
+function isWebUrl(value) {
+  try {
+    const url = new URL(String(value));
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function sendNativeBrowserStatus(state) {
+  if (!nativeBrowserTabId || !mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send("freshdesk:native-browser-status", { tabId: nativeBrowserTabId, ...state });
+}
+
+function getNativeBrowserView() {
+  if (nativeBrowserView && !nativeBrowserView.webContents.isDestroyed()) return nativeBrowserView;
+  if (!mainWindow || mainWindow.isDestroyed()) throw new Error("桌面窗口尚未准备就绪。");
+
+  const view = new WebContentsView({
+    webPreferences: {
+      partition: NATIVE_BROWSER_PARTITION,
+      preload: path.join(__dirname, "guest-preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  view.setBackgroundColor("#ffffff");
+  view.setVisible(false);
+  mainWindow.contentView.addChildView(view);
+
+  const contents = view.webContents;
+  const installCurrentTabTargetHandler = () => {
+    const source = `(() => {
+      if (window.__freshdeskCurrentTabTargetHandler) return;
+      window.__freshdeskCurrentTabTargetHandler = true;
+      document.documentElement?.setAttribute('data-freshdesk-same-tab-handler', 'active');
+      window.addEventListener('click', (event) => {
+        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        const candidate = event.composedPath().find((node) => node?.nodeType === 1 && typeof node.closest === 'function' && node.closest('a[href]'));
+        const anchor = candidate?.closest?.('a[href]');
+        const target = anchor?.getAttribute('target')?.trim().toLowerCase();
+        const url = anchor?.href;
+        if (!anchor || !target || target === '_self' || anchor.hasAttribute('download') || !url || !/^https?:/i.test(url)) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        window.location.assign(url);
+      }, true);
+    })()`;
+    void contents.executeJavaScript(source).catch((error) => startupLog(`Native browser target handler failed: ${error.message}`));
+  };
+  contents.on("dom-ready", installCurrentTabTargetHandler);
+  contents.on("new-window", (event, url) => {
+    event.preventDefault();
+    if (isWebUrl(url)) void contents.loadURL(url).catch((error) => startupLog(`Native browser legacy popup navigation failed: ${error.message}`));
+  });
+  contents.setWindowOpenHandler(({ url }) => {
+    if (isWebUrl(url)) {
+      void contents.loadURL(url).catch((error) => startupLog(`Native browser popup navigation failed: ${error.message}`));
+      return { action: "deny" };
+    }
+    return { action: "deny" };
+  });
+  contents.on("did-start-loading", () => sendNativeBrowserStatus({ type: "loading", url: contents.getURL() }));
+  contents.on("did-stop-loading", () => sendNativeBrowserStatus({ type: "stopped", url: contents.getURL(), title: contents.getTitle() }));
+  contents.on("did-navigate", (_event, url) => sendNativeBrowserStatus({ type: "navigated", url, title: contents.getTitle() }));
+  contents.on("did-navigate-in-page", (_event, url) => sendNativeBrowserStatus({ type: "navigated", url, title: contents.getTitle() }));
+  contents.on("page-title-updated", (_event, title) => sendNativeBrowserStatus({ type: "title", url: contents.getURL(), title }));
+  contents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (isMainFrame && errorCode !== -3) sendNativeBrowserStatus({ type: "failed", url: validatedURL, message: errorDescription });
+  });
+  contents.once("destroyed", () => {
+    if (nativeBrowserView === view) {
+      nativeBrowserView = null;
+      nativeBrowserTabId = null;
+    }
+  });
+  nativeBrowserView = view;
+  return view;
+}
+
+function validateNativeBrowserPayload(payload, requireUrl = true) {
+  if (!payload || typeof payload !== "object" || typeof payload.tabId !== "string") throw new Error("浏览器请求无效。");
+  const tabId = payload.tabId.slice(0, 160);
+  const url = payload.url === undefined ? undefined : String(payload.url);
+  if (requireUrl && !isWebUrl(url)) throw new Error("仅允许 HTTP 或 HTTPS 网页地址。");
+  const rawBounds = payload.bounds;
+  const bounds = rawBounds && typeof rawBounds === "object" ? {
+    x: Math.max(-10_000, Math.min(10_000, Math.round(Number(rawBounds.x) || 0))),
+    y: Math.max(-10_000, Math.min(10_000, Math.round(Number(rawBounds.y) || 0))),
+    width: Math.max(1, Math.min(20_000, Math.round(Number(rawBounds.width) || 0))),
+    height: Math.max(1, Math.min(20_000, Math.round(Number(rawBounds.height) || 0))),
+  } : null;
+  return { tabId, url, bounds };
+}
+
+function isDesktopRenderer(event) {
+  return event.sender === mainWindow?.webContents;
+}
+
 function safeDownloadName(value) {
   const normalized = String(value || "download").replace(/[\\/:*?"<>|]/g, "-").trim();
   return normalized.slice(0, 120) || "download";
 }
 
 function setupDownloads() {
-  session.defaultSession.on("will-download", (_event, item) => {
+  const registerDownloadSession = (downloadSession) => downloadSession.on("will-download", (_event, item) => {
     const sourceUrl = item.getURL();
     const matched = [...pendingDownloads.values()].find((request) => request.url === sourceUrl);
     if (matched) pendingDownloads.delete(matched.id);
@@ -52,6 +155,8 @@ function setupDownloads() {
       sendDownloadStatus({ id, state: completed ? "completed" : state === "cancelled" ? "cancelled" : "failed", title, url: sourceUrl, progress: completed ? 100 : 0, path: item.getSavePath(), message: completed ? "已保存到系统下载目录" : state === "cancelled" ? "已取消下载" : "下载未完成" });
     });
   });
+  registerDownloadSession(session.defaultSession);
+  registerDownloadSession(session.fromPartition(NATIVE_BROWSER_PARTITION));
 }
 
 function validateDownloadRequest(request) {
@@ -223,7 +328,7 @@ async function createWindow() {
     backgroundColor: "#0d1424",
     title: "Freshdesk Desktop",
     webPreferences: {
-      preload: path.join(__dirname, "preload.mjs"),
+      preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -235,12 +340,8 @@ async function createWindow() {
     guestPreferences.nodeIntegration = false;
     guestPreferences.contextIsolation = true;
     guestPreferences.sandbox = true;
+    guestPreferences.preload = path.join(__dirname, "guest-preload.cjs");
     guestParams.allowpopups = "true";
-  });
-  mainWindow.webContents.on("did-attach-webview", (_event, contents) => wireGuestNavigation(contents));
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url).catch(() => undefined);
-    return { action: "deny" };
   });
   mainWindow.once("ready-to-show", () => mainWindow?.show());
   await mainWindow.loadURL(startUrl);
@@ -262,6 +363,49 @@ ipcMain.handle("freshdesk:cancel-download", (_event, id) => {
   if (!item) return false;
   item.cancel();
   return true;
+});
+ipcMain.handle("freshdesk:native-browser-show", (event, payload) => {
+  if (!isDesktopRenderer(event)) throw new Error("未授权的浏览器请求。");
+  const { tabId, url, bounds } = validateNativeBrowserPayload(payload);
+  if (!bounds) throw new Error("浏览器显示区域无效。");
+  const view = getNativeBrowserView();
+  nativeBrowserTabId = tabId;
+  view.setBounds(bounds);
+  view.setVisible(true);
+  view.webContents.focus();
+  if (view.webContents.getURL() !== url) void view.webContents.loadURL(url).catch((error) => startupLog(`Native browser load failed: ${error.message}`));
+  return { shown: true };
+});
+ipcMain.handle("freshdesk:native-browser-hide", (event) => {
+  if (!isDesktopRenderer(event)) throw new Error("未授权的浏览器请求。");
+  if (nativeBrowserView && !nativeBrowserView.webContents.isDestroyed()) nativeBrowserView.setVisible(false);
+  nativeBrowserTabId = null;
+  return { hidden: true };
+});
+ipcMain.handle("freshdesk:native-browser-bounds", (event, payload) => {
+  if (!isDesktopRenderer(event)) throw new Error("未授权的浏览器请求。");
+  const { tabId, bounds } = validateNativeBrowserPayload(payload, false);
+  if (!bounds || !nativeBrowserView || nativeBrowserTabId !== tabId) return { updated: false };
+  nativeBrowserView.setBounds(bounds);
+  return { updated: true };
+});
+ipcMain.handle("freshdesk:native-browser-navigate", (event, payload) => {
+  if (!isDesktopRenderer(event)) throw new Error("未授权的浏览器请求。");
+  const { tabId, url } = validateNativeBrowserPayload(payload);
+  const view = getNativeBrowserView();
+  nativeBrowserTabId = tabId;
+  return view.webContents.loadURL(url).then(() => ({ navigated: true })).catch((error) => { throw new Error(`网页无法载入：${error.message}`); });
+});
+ipcMain.handle("freshdesk:native-browser-command", (event, payload) => {
+  if (!isDesktopRenderer(event) || !payload || typeof payload !== "object") throw new Error("未授权的浏览器请求。");
+  if (!nativeBrowserView || nativeBrowserView.webContents.isDestroyed() || nativeBrowserTabId !== payload.tabId) return { handled: false };
+  const contents = nativeBrowserView.webContents;
+  if (payload.command === "back" && contents.canGoBack()) contents.goBack();
+  else if (payload.command === "forward" && contents.canGoForward()) contents.goForward();
+  else if (payload.command === "reload") contents.reloadIgnoringCache();
+  else if (payload.command === "focus") contents.focus();
+  else return { handled: false };
+  return { handled: true };
 });
 ipcMain.handle("freshdesk:export-desktop-state", async (_event, payload) => {
   const serialized = validateBackupPayload(payload);
