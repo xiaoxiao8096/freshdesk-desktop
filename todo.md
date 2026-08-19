@@ -161,3 +161,4 @@
 - [ ] 使用受控、不可见的原生 target=_blank 窗口完成 Chromium 决议后，将 http/https URL 延迟交回原 guest，验证 Bing 搜索结果会在当前标签导航且不显示外部窗口。
 - [ ] 修复 webview 显式 allowpopups=false 覆盖主进程配置的问题，允许受控请求到达隐藏原生窗口接管器并验证同标签导航。
 - [ ] 兼容 webview new-window 事件将 URL 置于 CustomEvent.detail 的 Electron 版本差异，验证渲染层回退接管可从 Bing 结果读取目标并导航当前 guest。
+- [ ] 使用 Electron 主进程 Chromium 调试协议订阅 guest 的 Page.windowOpen 事件，将受控 http/https 目标安全交回当前标签，并完成 Bing 实机导航、前进/后退回归验证。

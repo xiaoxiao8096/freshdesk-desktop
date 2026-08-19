@@ -3,7 +3,7 @@ import electronUpdater from "electron-updater";
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { autoUpdater } = electronUpdater;
@@ -170,29 +170,45 @@ function startEmbeddedServer() {
 
 function wireGuestNavigation(contents) {
   const isWebUrl = (url) => /^https?:\/\//i.test(url);
-  contents.on("did-create-window", (popupWindow, details) => {
-    if (!isWebUrl(details.url)) {
-      popupWindow.destroy();
-      return;
-    }
-    // Chromium 已完成 target=_blank 的原生决议后，再把 URL 交回原 guest。
-    // 子窗口从不显示，并在原标签开始加载后销毁。
-    setTimeout(() => {
-      if (!contents.isDestroyed()) contents.loadURL(details.url).catch(() => undefined);
-    }, 60);
-    setTimeout(() => {
-      if (!popupWindow.isDestroyed()) popupWindow.destroy();
-    }, 1_200);
-  });
+  let lastPopupUrl = "";
+  let lastPopupAt = 0;
+  const routePopupInCurrentGuest = (url, source) => {
+    if (!isWebUrl(url) || contents.isDestroyed()) return false;
+    const targetUrl = new URL(url).toString();
+    const now = Date.now();
+    if (targetUrl === lastPopupUrl && now - lastPopupAt < 400) return true;
+    lastPopupUrl = targetUrl;
+    lastPopupAt = now;
+    startupLog(`Guest ${source}: ${targetUrl}`);
+    setImmediate(() => {
+      if (contents.isDestroyed()) return;
+      contents.loadURL(targetUrl)
+        .then(() => startupLog(`Guest current-tab navigation complete: ${contents.getURL()}`))
+        .catch((error) => startupLog(`Guest current-tab navigation failed: ${error.message}`));
+    });
+    return true;
+  };
+
+  // Electron 的 webview 对 target=_blank 锚点可能不会触发原生 window-open
+  // 回调。Chromium 本身会稳定发出 Page.windowOpen，因此只在主进程内部订阅
+  // 该事件，并将合规的 http(s) 目标交回同一个受 sandbox 保护的 guest。
+  try {
+    const guestDebugger = contents.debugger;
+    guestDebugger.on("message", (_event, method, params) => {
+      if (method === "Page.windowOpen") routePopupInCurrentGuest(params?.url, "Page.windowOpen");
+    });
+    guestDebugger.on("detach", (_event, reason) => startupLog(`Guest debugger detached: ${reason}`));
+    guestDebugger.attach("1.3");
+    guestDebugger.sendCommand("Page.enable")
+      .then(() => startupLog("Guest Page.windowOpen routing enabled."))
+      .catch((error) => startupLog(`Guest Page.enable failed: ${error.message}`));
+  } catch (error) {
+    startupLog(`Guest debugger attach failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
   contents.setWindowOpenHandler(({ url }) => {
-    if (!isWebUrl(url)) return { action: "deny" };
-    return {
-      action: "allow",
-      overrideBrowserWindowOptions: {
-        show: false,
-        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
-      },
-    };
+    routePopupInCurrentGuest(url, "window-open fallback");
+    return { action: "deny" };
   });
 }
 
@@ -216,10 +232,6 @@ async function createWindow() {
   });
 
   mainWindow.webContents.on("will-attach-webview", (_event, guestPreferences, guestParams) => {
-    // 预加载仅在隔离 guest 世界捕获普通 target 链接；不向网页公开任何 Node/Electron 接口。
-    const guestPreloadUrl = pathToFileURL(path.join(__dirname, "guest-preload.cjs")).toString();
-    guestPreferences.preload = guestPreloadUrl;
-    guestParams.preload = guestPreloadUrl;
     guestPreferences.nodeIntegration = false;
     guestPreferences.contextIsolation = true;
     guestPreferences.sandbox = true;

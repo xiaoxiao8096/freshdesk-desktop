@@ -22,27 +22,23 @@ describe("Electron 主进程依赖加载", () => {
     expect(mainProcessSource).toContain("function validateBackupPayload(payload)");
   });
 
-  it("将网站的新窗口请求限制在当前 Chromium 网页视图内，而不阻断站内确认后的跳转", () => {
+  it("通过 Chromium Page.windowOpen 将目标链接安全交回当前 guest，而不创建外部窗口", () => {
     expect(mainProcessSource).toContain('guestParams.allowpopups = "true";');
+    expect(mainProcessSource).toContain("const routePopupInCurrentGuest = (url, source) => {");
+    expect(mainProcessSource).toContain('if (method === "Page.windowOpen") routePopupInCurrentGuest(params?.url, "Page.windowOpen");');
+    expect(mainProcessSource).toContain('guestDebugger.attach("1.3");');
+    expect(mainProcessSource).toContain('guestDebugger.sendCommand("Page.enable")');
     expect(mainProcessSource).toContain("contents.setWindowOpenHandler(({ url }) => {");
-    expect(mainProcessSource).toContain("contents.on(\"did-create-window\"");
-    expect(mainProcessSource).toContain("contents.loadURL(details.url)");
-    expect(mainProcessSource).toContain('action: "allow"');
-    expect(mainProcessSource).toContain("show: false");
-    expect(mainProcessSource).toContain("webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }");
-    expect(mainProcessSource).toContain('if (!isWebUrl(url)) return { action: "deny" };');
-  });
-
-  it("仅为 guest 配置无 Node/Electron 接口的同标签导航预加载，并保留 Chromium 安全边界", () => {
-    expect(mainProcessSource).toContain('const guestPreloadUrl = pathToFileURL(path.join(__dirname, "guest-preload.cjs")).toString();');
-    expect(mainProcessSource).toContain("guestPreferences.preload = guestPreloadUrl;");
-    expect(mainProcessSource).toContain("guestParams.preload = guestPreloadUrl;");
-    expect(mainProcessSource).toContain("guestPreferences.nodeIntegration = false;");
+    expect(mainProcessSource).toContain('routePopupInCurrentGuest(url, "window-open fallback");');
+    expect(mainProcessSource).toContain('return { action: "deny" };');
+    expect(mainProcessSource).toContain("contents.loadURL(targetUrl)");
     expect(mainProcessSource).toContain("guestPreferences.contextIsolation = true;");
     expect(mainProcessSource).toContain("guestPreferences.sandbox = true;");
   });
 
-  it("仅从本地 Electron 资源向前端提供固定 guest 预加载 URL", () => {
-    expect(preloadBridgeSource).toContain('browserGuestPreloadUrl: new URL("./guest-preload.cjs", import.meta.url).toString(),');
+  it("保持 guest 禁用 Node 并启用上下文隔离与 Chromium sandbox", () => {
+    expect(mainProcessSource).toContain("guestPreferences.nodeIntegration = false;");
+    expect(mainProcessSource).toContain("guestPreferences.contextIsolation = true;");
+    expect(mainProcessSource).toContain("guestPreferences.sandbox = true;");
   });
 });

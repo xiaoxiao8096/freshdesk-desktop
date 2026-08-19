@@ -20,8 +20,9 @@ describe("Electron Chromium 网页视图 target 链接接管", () => {
     expect(homeSource).toContain('allowpopups: "true"');
   });
 
-  it("在 Chromium guest 初次导航前将受控预加载 URL 传递给 webview 属性", () => {
-    expect(homeSource).toContain("const electronGuestPreloadUrl = isElectronDesktop ? window.freshdeskDesktop?.browserGuestPreloadUrl ?? \"\" : \"\";");
-    expect(homeSource).toContain("preload: electronGuestPreloadUrl");
+  it("不依赖 guest 预加载可用性，并始终创建受 sandbox 保护的 Chromium 网页视图", () => {
+    expect(homeSource).not.toContain("electronGuestPreloadUrl");
+    expect(homeSource).not.toContain("preload: electronGuestPreloadUrl");
+    expect(homeSource).toContain('webpreferences: "contextIsolation=yes, sandbox=yes"');
   });
 });
