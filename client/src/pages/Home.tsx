@@ -1047,12 +1047,25 @@ export default function Home() {
       setBrowserFallbackNotice("该网页未能完成加载，但仍保留在当前 Chromium 标签中。你可以刷新、返回或继续输入其他网址；不会自动改成阅读模式。");
       setFrameStatus("error");
     };
+    const routeGuestPopupInCurrentTab = (event: Event) => {
+      const popup = event as Event & { url?: string; preventDefault?: () => void };
+      const popupUrl = popup.url;
+      if (!popupUrl || !/^https?:\/\//i.test(popupUrl)) return;
+      // 同时在 webview 宿主侧接管 target=_blank/window.open：部分搜索引擎会在
+      // 主进程拒绝新窗口后放弃同步导航，直接由当前 Chromium guest 加载可避免死链。
+      popup.preventDefault?.();
+      const guest = webview as typeof webview & { loadURL?: (url: string) => Promise<void> };
+      window.setTimeout(() => {
+        guest.loadURL?.(popupUrl).catch(() => undefined);
+      }, 0);
+    };
     webview.addEventListener("did-start-loading", startGuestLoad);
     webview.addEventListener("did-finish-load", syncGuestRoute);
     webview.addEventListener("did-navigate", syncGuestRoute);
     webview.addEventListener("did-navigate-in-page", syncGuestRoute);
     webview.addEventListener("page-title-updated", syncGuestTitle);
     webview.addEventListener("did-fail-load", failGuestLoad);
+    webview.addEventListener("new-window", routeGuestPopupInCurrentTab);
     return () => {
       webview.removeEventListener("did-finish-load", syncGuestRoute);
       webview.removeEventListener("did-navigate", syncGuestRoute);
@@ -1060,6 +1073,7 @@ export default function Home() {
       webview.removeEventListener("page-title-updated", syncGuestTitle);
       webview.removeEventListener("did-start-loading", startGuestLoad);
       webview.removeEventListener("did-fail-load", failGuestLoad);
+      webview.removeEventListener("new-window", routeGuestPopupInCurrentTab);
     };
   }, [activeBrowserTab?.id, activeBrowserTab?.mode, activeBrowserTab?.reloadNonce, activeBrowserTab?.url, isElectronDesktop]);
 

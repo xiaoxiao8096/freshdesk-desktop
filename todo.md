@@ -150,3 +150,6 @@
 - [ ] 审计 webview 的新窗口、导航、权限、分区与输入焦点策略，确保站内链接、目标链接和搜索结果均遵循普通浏览器的当前标签或显式新标签行为。
 - [ ] 依据 Apple macOS Human Interface Guidelines 制定系统级视觉与交互规格，统一桌面、菜单栏、Dock、窗口、侧边栏、工具栏、列表、表单与反馈层级。
 - [ ] 按统一 macOS 设计令牌分阶段重构核心桌面外壳和高频应用，补充每项改造的可执行交互测试与 Windows 实机验证。
+- [ ] 针对截图所示 Bing 结果页，采集 Electron webview 的 pointer、click、before-input-event、did-frame-navigate、did-navigate、did-create-window 与 console 事件，区分点击未命中与导航被拦截两类根因。
+- [ ] 审计并移除浏览器内容区中任何透明遮罩、错误状态层或 React 捕获事件对 Chromium 网页视图的鼠标命中和焦点传递干扰。
+- [ ] 在 Windows Chromium 调试协议中实际选择 Bing 搜索结果链接并触发点击，验证 URL 改变、页面载入和前进后退状态同步后才发布修复版本。

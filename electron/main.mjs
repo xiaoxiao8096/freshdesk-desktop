@@ -170,9 +170,9 @@ function startEmbeddedServer() {
 
 function wireGuestNavigation(contents) {
   contents.setWindowOpenHandler(({ url }) => {
-    // 目标链接常在 window.open 回调内同步创建。先拒绝新窗口，再将导航排队到
-    // 当前 guest，避免 Chromium 在同一事件循环中撤销这次 loadURL。
-    queueMicrotask(() => contents.loadURL(url).catch(() => undefined));
+    // 目标链接常在 window.open 回调内同步创建。先拒绝额外窗口；随后将导航延后
+    // 到当前 guest，避免 Chromium 在弹窗请求尚未结算时丢弃这次 loadURL。
+    setTimeout(() => contents.loadURL(url).catch(() => undefined), 24);
     return { action: "deny" };
   });
 }
