@@ -12,7 +12,11 @@ describe("Electron Chromium 网页视图 target 链接接管", () => {
   });
 
   it("只接管 http 和 https 网页请求，保留非网页协议的安全边界", () => {
-    expect(homeSource).toContain("if (!popupUrl || !/^https?:\\/\\//i.test(popupUrl)) return;");
+    expect(homeSource).toContain(String.raw`if (!popupUrl || !/^https?:\/\//i.test(popupUrl)) return;`);
+  });
+
+  it("显式允许网页视图提交窗口请求，但由主进程隐藏接管而非显示新窗口", () => {
+    expect(homeSource).toContain('allowpopups: "true"');
   });
 
   it("在 Chromium guest 初次导航前将受控预加载 URL 传递给 webview 属性", () => {
