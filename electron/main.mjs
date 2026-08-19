@@ -190,6 +190,9 @@ function wireGuestNavigation(contents) {
   // 恢复会话中的 dom-ready 可能先于 guest 监听注册完成；在文档载入后再注入，
   // 确保每一个实际页面都得到 target 同标签拦截器。
   contents.on("did-finish-load", installSameTabTargetHandler);
+  // 对已恢复且早已完成加载的标签，did-finish-load 不会再次触发；附加时立即
+  // 尝试一次，页面已就绪时可直接注入，未就绪时仍由上方事件在载入后补注入。
+  installSameTabTargetHandler();
   contents.setWindowOpenHandler(({ url }) => {
     // 目标链接常在 window.open 回调内同步创建。先拒绝额外窗口；随后将导航延后
     // 到当前 guest，避免 Chromium 在弹窗请求尚未结算时丢弃这次 loadURL。

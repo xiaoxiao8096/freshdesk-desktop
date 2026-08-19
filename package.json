@@ -1,6 +1,6 @@
 {
   "name": "freshdesk-mac-experience",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "type": "module",
   "main": "electron/main.mjs",
   "license": "MIT",
