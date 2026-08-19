@@ -23,9 +23,14 @@ describe("Electron 主进程依赖加载", () => {
   });
 
   it("将网站的新窗口请求限制在当前 Chromium 网页视图内，而不阻断站内确认后的跳转", () => {
-    expect(mainProcessSource).toContain('guestParams.allowpopups = "false";');
+    expect(mainProcessSource).toContain('guestParams.allowpopups = "true";');
     expect(mainProcessSource).toContain("contents.setWindowOpenHandler(({ url }) => {");
-    expect(mainProcessSource).toContain('return { action: "deny" };');
+    expect(mainProcessSource).toContain("contents.on(\"did-create-window\"");
+    expect(mainProcessSource).toContain("contents.loadURL(details.url)");
+    expect(mainProcessSource).toContain('action: "allow"');
+    expect(mainProcessSource).toContain("show: false");
+    expect(mainProcessSource).toContain("webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }");
+    expect(mainProcessSource).toContain('if (!isWebUrl(url)) return { action: "deny" };');
   });
 
   it("仅为 guest 配置无 Node/Electron 接口的同标签导航预加载，并保留 Chromium 安全边界", () => {

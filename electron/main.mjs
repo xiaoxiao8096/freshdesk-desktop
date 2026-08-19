@@ -169,10 +169,30 @@ function startEmbeddedServer() {
 }
 
 function wireGuestNavigation(contents) {
+  const isWebUrl = (url) => /^https?:\/\//i.test(url);
+  contents.on("did-create-window", (popupWindow, details) => {
+    if (!isWebUrl(details.url)) {
+      popupWindow.destroy();
+      return;
+    }
+    // Chromium 已完成 target=_blank 的原生决议后，再把 URL 交回原 guest。
+    // 子窗口从不显示，并在原标签开始加载后销毁。
+    setTimeout(() => {
+      if (!contents.isDestroyed()) contents.loadURL(details.url).catch(() => undefined);
+    }, 60);
+    setTimeout(() => {
+      if (!popupWindow.isDestroyed()) popupWindow.destroy();
+    }, 1_200);
+  });
   contents.setWindowOpenHandler(({ url }) => {
-    // 不创建任何原生弹窗。前端 webview 的 new-window 监听器会获取 url，
-    // 并调用当前 guest 的 loadURL，使所有 target 链接留在当前标签。
-    return { action: "deny" };
+    if (!isWebUrl(url)) return { action: "deny" };
+    return {
+      action: "allow",
+      overrideBrowserWindowOptions: {
+        show: false,
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+      },
+    };
   });
 }
 
@@ -203,7 +223,7 @@ async function createWindow() {
     guestPreferences.nodeIntegration = false;
     guestPreferences.contextIsolation = true;
     guestPreferences.sandbox = true;
-    guestParams.allowpopups = "false";
+    guestParams.allowpopups = "true";
   });
   mainWindow.webContents.on("did-attach-webview", (_event, contents) => wireGuestNavigation(contents));
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

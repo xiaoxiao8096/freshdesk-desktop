@@ -158,3 +158,4 @@
 - [ ] 将 webview 预加载由 ESM 扩展名改为 Node require 可加载的 CommonJS 文件，并在 Windows 正式构建验证当前标签目标链接接管。
 - [ ] 同时在 will-attach-webview 的参数与 guest 偏好中声明 file: CommonJS 预加载地址，验证正式 Chromium guest 的预加载就绪标记和目标链接同标签导航。
 - [ ] 将由 Electron 本地预加载桥接生成的固定 guest 预加载 file: URL 显式传入 webview 的初始属性，验证其在首次导航前实际执行并接管 Bing 结果目标链接。
+- [ ] 使用受控、不可见的原生 target=_blank 窗口完成 Chromium 决议后，将 http/https URL 延迟交回原 guest，验证 Bing 搜索结果会在当前标签导航且不显示外部窗口。
