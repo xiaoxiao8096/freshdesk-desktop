@@ -28,7 +28,7 @@ describe("Electron 主进程依赖加载", () => {
   });
 
   it("仅为 guest 配置无 Node/Electron 接口的同标签导航预加载，并保留 Chromium 安全边界", () => {
-    expect(mainProcessSource).toContain('guestPreferences.preload = pathToFileURL(path.join(__dirname, "guest-preload.mjs")).toString();');
+    expect(mainProcessSource).toContain('guestPreferences.preload = pathToFileURL(path.join(__dirname, "guest-preload.cjs")).toString();');
     expect(mainProcessSource).toContain("guestPreferences.nodeIntegration = false;");
     expect(mainProcessSource).toContain("guestPreferences.contextIsolation = true;");
     expect(mainProcessSource).toContain("guestPreferences.sandbox = true;");
