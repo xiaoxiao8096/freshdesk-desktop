@@ -29,7 +29,7 @@ Freshdesk Desktop 不试图伪造 macOS 的系统级身份，而是采用 macOS 
 
 ## 分阶段实施
 
-第一阶段建立全局材料、窗口状态和内容层级，重构菜单栏、Dock 与窗口框架。第二阶段将 Finder、Safari 与设置的工具栏和侧边栏迁移至统一结构。第三阶段对其余应用补充列表、检查器、空状态与键盘快捷键的一致性验证。
+第一阶段建立全局材料、窗口状态和内容层级，重构菜单栏、Dock 与窗口框架。第二阶段将 Finder、Safari 与设置的工具栏和侧边栏迁移至统一结构。第三阶段对其余应用补充列表、检查器、空状态与键盘快捷键的一致性验证。2026-08-19 的实现将音乐、照片、便笺、日历、提醒事项和终端纳入同一层级：工具栏只承载当前上下文与少量高频操作，侧边栏维持不超过两级的导航，列表使用持续选中态或完成标记，简短输入保留提示与清晰焦点环，终端使用独立的深色内容材料。[5] [6] [7] [8]
 
 ## 参考资料
 
@@ -40,3 +40,11 @@ Freshdesk Desktop 不试图伪造 macOS 的系统级身份，而是采用 macOS 
 [3] [Apple, Toolbars](https://developer.apple.com/design/human-interface-guidelines/toolbars)
 
 [4] [Apple, Sidebars](https://developer.apple.com/design/human-interface-guidelines/sidebars)
+
+[5] [Apple, Lists and tables](https://developer.apple.com/design/human-interface-guidelines/lists-and-tables)
+
+[6] [Apple, Text fields](https://developer.apple.com/design/human-interface-guidelines/text-fields)
+
+[7] [Apple, Toolbars](https://developer.apple.com/design/human-interface-guidelines/toolbars)
+
+[8] [Apple, Sidebars](https://developer.apple.com/design/human-interface-guidelines/sidebars)

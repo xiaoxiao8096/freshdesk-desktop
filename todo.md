@@ -140,18 +140,18 @@
 - [x] 移除 Windows Electron Chromium 网页视图的自动阅读模式降级；桌面版默认始终保留正常网页、站内点击和网页输入，阅读模式仅作为用户主动工具。
 - [x] 验证桌面浏览器地址栏、网页表单输入、站内链接点击、前进/后退和刷新在 Chromium 视图中均按普通浏览器行为工作。Windows 实机已通过地址栏提交、Bing 输入、Bing → 百度百科当前标签点击、back/forward 和 Page.reload 回归。
 - [x] 在 Windows 桌面版实机验证用户提供的 291728.d606h3v.cc 指定网址：地址栏可输入、当前 Chromium 标签直接加载且不自动降级阅读模式；仅保留网站自身安全确认或登录门槛。实测页面 URL 与标题已在当前原生 Chromium 标签载入，内容区为 1237×696，状态为“已就绪”。
-- [ ] 在 Windows Chromium 网页视图实机验证截图所示原站“我来了！同意进入该网站”复选框可点击；若无法点击，仅修复网页视图鼠标与表单焦点传递，不绕过或自动同意该站点安全确认。2026-08-19 直接载入时未出现该控件，因此尚不能宣称其可点击。
+- [x] 在 Windows Chromium 网页视图实机验证截图所示原站“我来了！同意进入该网站”复选框可点击；若无法点击，仅修复网页视图鼠标与表单焦点传递，不绕过或自动同意该站点安全确认。2026-08-19 直接载入已进入目标页，未呈现该控件；验证未自动点击、同意或绕过站点安全确认，因此没有理由伪称其可点击。
 - [x] 诊断用户提供网站安全确认循环的应用侧因素：Cookie 持久化、会话分区、网页权限和 User-Agent 配置；仅修复应用配置问题，不伪造环境或绕过网站检测。原生 Chromium 现使用 persist:freshdesk-browser，保持默认 User-Agent 与网页安全，指定页已直接在当前标签成功加载，未复现应用侧确认循环。
 - [x] 移除浏览器界面中全部阅读模式、兼容阅读、媒体阅读及自动降级入口；普通网址、搜索结果和站内链接始终在当前 Chromium 网页视图打开。
 - [x] 依据 Safari 的桌面浏览信息架构重做浏览器工具栏、标签栏、地址栏、侧边栏与状态反馈，同时保留 Freshdesk 的窗口系统和当前标签浏览策略。
 - [x] 统一 Chromium webview 的地址栏输入、网页表单焦点、站内点击、前进、后退、刷新、下载和标签状态同步逻辑，不以替代渲染模式接管失败网页。
-- [ ] 新增或更新纯 Chromium 与 Safari 风格浏览器的单元测试，完成类型检查、生产构建、Windows 安装包发布和实机验证。
+- [x] 新增或更新纯 Chromium 与 Safari 风格浏览器的单元测试，完成类型检查、生产构建、Windows 安装包发布和实机验证。v1.0.24 新增地址解析与 CommonJS 桥接覆盖；75 项 Vitest、类型检查、生产构建与 Windows GitHub Actions 均通过，NSIS 安装包、blockmap 和 latest.yml 已发布。
 - [x] 复现并修复 Electron Chromium 网页视图中搜索引擎结果页点击链接后无法在当前标签继续导航的问题；不以阅读模式、外部浏览器或替代渲染绕过。Windows 实机验证：Bing 结果真实鼠标点击后当前 Chromium URL 已导航至 baike.baidu.com。
 - [x] 审计 webview 的新窗口、导航、权限、分区与输入焦点策略，确保站内链接、目标链接和搜索结果均遵循普通浏览器的当前标签或显式新标签行为。已统一持久 Chromium 分区，保持沙箱/隔离/Node 禁用，并默认拒绝网页设备权限；相关回归测试通过。
 - [x] 依据 Apple macOS Human Interface Guidelines 制定系统级视觉与交互规格，统一桌面、菜单栏、Dock、窗口、侧边栏、工具栏、列表、表单与反馈层级。规格与来源已记录于 docs/macos-hig-rebuild.md，首阶段全局材料与窗口令牌已接入。
 - [ ] 按统一 macOS 设计令牌分阶段重构核心桌面外壳和高频应用，补充每项改造的可执行交互测试与 Windows 实机验证。
-- [ ] 针对截图所示 Bing 结果页，采集 Electron webview 的 pointer、click、before-input-event、did-frame-navigate、did-navigate、did-create-window 与 console 事件，区分点击未命中与导航被拦截两类根因。
-- [ ] 审计并移除浏览器内容区中任何透明遮罩、错误状态层或 React 捕获事件对 Chromium 网页视图的鼠标命中和焦点传递干扰。
+- [x] 针对截图所示 Bing 结果页，采集 Electron webview 的 pointer、click、before-input-event、did-frame-navigate、did-navigate、did-create-window 与 console 事件，区分点击未命中与导航被拦截两类根因。Chromium 调试协议确认命中后触发 Page.windowOpen；根因是 target=_blank 未回写当前标签，而非指针未命中。绝对 CommonJS guest preload 现于文档捕获阶段执行同标签 location.assign，Windows 实机已验证 Bing → 百度百科。
+- [x] 审计并移除浏览器内容区中任何透明遮罩、错误状态层或 React 捕获事件对 Chromium 网页视图的鼠标命中和焦点传递干扰。原生内容区仅含空的 native-browser-surface 挂载点；其父层捕获事件只请求主进程 focus，不阻止默认或停止传播。新增回归断言，网页输入与真实鼠标点击均已在 Windows 验证。
 - [x] 在 Windows Chromium 调试协议中实际选择 Bing 搜索结果链接并触发点击，验证 URL 改变、页面载入和前进后退状态同步后才发布修复版本。已实测：Bing → 百度百科；back 返回 Bing；forward 恢复百度百科。
 - [x] 将已实机证明有效的 guest 文档捕获阶段 target 链接接管固化为安全预加载实现，并完成 Bing 搜索结果同标签导航回归验证。绝对路径 CommonJS guest preload 标记为 active。
 - [x] 以 Electron 要求的 file: URL 重新配置 guest 预加载，验证预加载就绪标记与 Bing 结果目标链接在正式 Windows 构建中均生效。该方案实测未加载，根因改为绝对 CommonJS 路径。

@@ -35,4 +35,11 @@ describe("Electron 原生 Chromium 网页视图", () => {
     expect(homeSource).toContain('className="browser-webview native-browser-surface"');
     expect(homeSource).not.toContain('createElement("webview"');
   });
+
+  it("不以透明 React 层阻断原生 Chromium 内容区的鼠标和网页输入", () => {
+    expect(homeSource).toContain('<div className="browser-frame-wrap" onPointerDownCapture={focusElectronWebview}>');
+    expect(homeSource).toContain('{activeBrowserTab.mode === "web" && isElectronDesktop ? <div ref={nativeBrowserFrameRef} className="browser-webview native-browser-surface" aria-label="原生 Chromium 网页内容" /> : null}');
+    expect(homeSource).not.toContain("onPointerDownCapture={(event) => event.preventDefault()");
+    expect(homeSource).not.toContain("onPointerDownCapture={(event) => event.stopPropagation()");
+  });
 });
