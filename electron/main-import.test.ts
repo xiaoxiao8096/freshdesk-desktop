@@ -22,12 +22,9 @@ describe("Electron 主进程依赖加载", () => {
   });
 
   it("将网站的新窗口请求限制在当前 Chromium 网页视图内，而不阻断站内确认后的跳转", () => {
-    expect(mainProcessSource).toContain('guestParams.allowpopups = "true";');
-    expect(mainProcessSource).toContain('contents.on("did-create-window", (popupWindow, details) => {');
-    expect(mainProcessSource).toContain("popupWindow.destroy();");
-    expect(mainProcessSource).toContain("contents.loadURL(popupUrl).catch(() => undefined);");
+    expect(mainProcessSource).toContain('guestParams.allowpopups = "false";');
     expect(mainProcessSource).toContain("contents.setWindowOpenHandler(({ url }) => {");
-    expect(mainProcessSource).toContain('return { action: "allow", overrideBrowserWindowOptions: { show: false } };');
+    expect(mainProcessSource).toContain('return { action: "deny" };');
   });
 
   it("不为 guest 暴露自定义 preload 或 Node 接口", () => {
