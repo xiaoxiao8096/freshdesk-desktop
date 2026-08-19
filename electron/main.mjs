@@ -169,6 +169,25 @@ function startEmbeddedServer() {
 }
 
 function wireGuestNavigation(contents) {
+  const installSameTabTargetHandler = () => {
+    contents.executeJavaScript(`
+      (() => {
+        if (window.__freshdeskSameTabTargetHandlerInstalled) return;
+        Object.defineProperty(window, "__freshdeskSameTabTargetHandlerInstalled", { value: true });
+        document.addEventListener("click", (event) => {
+          const candidate = event.composedPath().find((node) => node?.nodeType === 1 && node.closest?.("a[href]"));
+          const anchor = candidate?.closest?.("a[href]");
+          const target = anchor?.getAttribute("target")?.toLowerCase();
+          if (!anchor || !target || target === "_self" || !/^https?:/i.test(anchor.href)) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          window.location.assign(anchor.href);
+        }, true);
+      })();
+    `).catch(() => undefined);
+  };
+
+  contents.on("dom-ready", installSameTabTargetHandler);
   contents.setWindowOpenHandler(({ url }) => {
     // 目标链接常在 window.open 回调内同步创建。先拒绝额外窗口；随后将导航延后
     // 到当前 guest，避免 Chromium 在弹窗请求尚未结算时丢弃这次 loadURL。
