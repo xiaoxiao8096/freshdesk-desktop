@@ -24,6 +24,13 @@ describe("Electron 原生 Chromium 网页视图", () => {
     expect(homeSource).toContain('command: "focus"');
   });
 
+  it("将 Safari 地址栏提交交给统一地址解析，并在 Electron 中继续使用当前原生标签", () => {
+    expect(homeSource).toContain('import { resolveSafariAddress } from "@/lib/browserAddress";');
+    expect(homeSource).toContain("const resolution = resolveSafariAddress(value, activeBrowserTab?.url ?? \"about:blank\");");
+    expect(homeSource).toContain('onSubmit={(event) => { event.preventDefault(); navigateBrowser(activeBrowserTab.address); }}');
+    expect(homeSource).toContain('aria-label="Safari 风格智能搜索栏"');
+  });
+
   it("不再创建 webview，而以原生内容区域承接 Chromium 视图", () => {
     expect(homeSource).toContain('className="browser-webview native-browser-surface"');
     expect(homeSource).not.toContain('createElement("webview"');

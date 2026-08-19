@@ -13,7 +13,7 @@ import { bringWindowToFront, clampRestoredWindowBounds, closeAllWindows, closeWi
 import { recordRecentVideo } from "@/lib/recentVideos";
 import { loadStoredSnapshot } from "@/lib/desktopSnapshot";
 import { createDesktopBackup, desktopBackupFilename, parseDesktopBackup } from "@/lib/desktopBackup";
-import { desktopSearchUrl } from "@/lib/desktopBrowserMode";
+import { resolveSafariAddress } from "@/lib/browserAddress";
 import {
   Archive,
   ArrowLeft,
@@ -1192,20 +1192,6 @@ export default function Home() {
     videoReportMutation.mutate({ url: report.url, title: report.title, provider: report.provider, reason: "playback_failed" });
   };
 
-  const normalizeUrl = (value: string) => {
-    const trimmed = value.trim();
-    if (!trimmed) return activeBrowserTab?.url ?? "about:blank";
-    if (/^https?:\/\//i.test(trimmed)) return trimmed;
-    if (trimmed.includes(" ")) return trimmed;
-    return `https://${trimmed}`;
-  };
-
-  const looksLikeSearch = (value: string) => {
-    const trimmed = value.trim();
-    if (!trimmed || /^https?:\/\//i.test(trimmed)) return false;
-    return trimmed.includes(" ") || (!trimmed.includes(".") && !trimmed.includes("/") && !trimmed.includes(":"));
-  };
-
   const updateActiveBrowserTab = (updater: (tab: BrowserTab) => BrowserTab) => {
     setBrowserTabs((tabs) => tabs.map((tab) => tab.id === activeBrowserTabId ? updater(tab) : tab));
   };
@@ -1231,7 +1217,7 @@ export default function Home() {
   };
 
   const openWebInCurrentTab = (url: string, title?: string) => {
-    const nextUrl = normalizeUrl(url);
+    const nextUrl = resolveSafariAddress(url, activeBrowserTab?.url ?? "about:blank").url;
     updateActiveBrowserTab((tab) => {
       const route: BrowserRoute = { url: nextUrl, address: nextUrl, title: title || labelFromUrl(nextUrl), mode: "web" };
       return { ...appendBrowserRoute(tab, route), videoSource: undefined, mediaItems: undefined, mediaIndex: undefined };
@@ -1326,12 +1312,9 @@ export default function Home() {
   };
 
   const navigateBrowser = (value: string) => {
-    if (looksLikeSearch(value)) {
-      const query = value.trim();
-      openWebInCurrentTab(desktopSearchUrl(query), `搜索：${query}`);
-      return;
-    }
-    openWebInCurrentTab(value);
+    const resolution = resolveSafariAddress(value, activeBrowserTab?.url ?? "about:blank");
+    if (resolution.kind === "empty") return;
+    openWebInCurrentTab(resolution.url, resolution.kind === "search" ? `搜索：${resolution.query}` : undefined);
   };
 
   const openReaderMode = () => {

@@ -14,6 +14,15 @@ describe("Electron 主进程依赖加载", () => {
     expect(preloadBridgeSource).toContain('contextBridge.exposeInMainWorld("freshdeskDesktop"');
   });
 
+  it("CommonJS 主窗口桥接完整暴露当前标签浏览器的受控接口", () => {
+    expect(preloadBridgeSource).toContain('const { contextBridge, ipcRenderer } = require("electron");');
+    expect(preloadBridgeSource).toContain("const desktopPlatform = process.platform;");
+    expect(preloadBridgeSource).toContain('nativeBrowserShow: (payload) => ipcRenderer.invoke("freshdesk:native-browser-show", payload)');
+    expect(preloadBridgeSource).toContain('nativeBrowserNavigate: (payload) => ipcRenderer.invoke("freshdesk:native-browser-navigate", payload)');
+    expect(preloadBridgeSource).toContain('nativeBrowserCommand: (payload) => ipcRenderer.invoke("freshdesk:native-browser-command", payload)');
+    expect(preloadBridgeSource).toContain('ipcRenderer.on("freshdesk:native-browser-status", handler)');
+  });
+
   it("只为受控 IPC 暴露下载取消与本地备份文件操作", () => {
     expect(mainProcessSource).toContain('ipcMain.handle("freshdesk:start-download"');
     expect(mainProcessSource).toContain('ipcMain.handle("freshdesk:cancel-download"');
@@ -48,7 +57,19 @@ describe("Electron 主进程依赖加载", () => {
     expect(mainProcessSource).toContain("contextIsolation: true,");
     expect(mainProcessSource).toContain("sandbox: true,");
     expect(mainProcessSource).toContain("webviewTag: true,");
+    expect(mainProcessSource).toContain("guestPreferences.webSecurity = true;");
+    expect(mainProcessSource).toContain("guestPreferences.partition = NATIVE_BROWSER_PARTITION;");
+    expect(mainProcessSource).toContain("guestParams.partition = NATIVE_BROWSER_PARTITION;");
     expect(mainProcessSource).toContain('guestPreferences.preload = path.join(__dirname, "guest-preload.cjs");');
     expect(mainProcessSource).toContain("function isDesktopRenderer(event)");
+  });
+
+  it("使用独立持久 Chromium 会话且不替用户授予网页设备权限", () => {
+    expect(mainProcessSource).toContain("function configureBrowserSession()");
+    expect(mainProcessSource).toContain("session.fromPartition(NATIVE_BROWSER_PARTITION)");
+    expect(mainProcessSource).toContain("browserSession.setPermissionCheckHandler");
+    expect(mainProcessSource).toContain("browserSession.setPermissionRequestHandler");
+    expect(mainProcessSource).toContain("callback(false);");
+    expect(mainProcessSource).toContain("configureBrowserSession();");
   });
 });

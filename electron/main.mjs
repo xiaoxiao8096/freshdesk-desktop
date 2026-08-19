@@ -159,6 +159,18 @@ function setupDownloads() {
   registerDownloadSession(session.fromPartition(NATIVE_BROWSER_PARTITION));
 }
 
+function configureBrowserSession() {
+  const browserSession = session.fromPartition(NATIVE_BROWSER_PARTITION);
+  browserSession.setPermissionCheckHandler((_webContents, permission) => {
+    startupLog(`Blocked browser permission check: ${permission}`);
+    return false;
+  });
+  browserSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    startupLog(`Blocked browser permission request: ${permission}`);
+    callback(false);
+  });
+}
+
 function validateDownloadRequest(request) {
   if (!request || typeof request !== "object" || typeof request.id !== "string" || typeof request.url !== "string") throw new Error("下载请求无效。");
   const url = new URL(request.url);
@@ -340,7 +352,10 @@ async function createWindow() {
     guestPreferences.nodeIntegration = false;
     guestPreferences.contextIsolation = true;
     guestPreferences.sandbox = true;
+    guestPreferences.webSecurity = true;
+    guestPreferences.partition = NATIVE_BROWSER_PARTITION;
     guestPreferences.preload = path.join(__dirname, "guest-preload.cjs");
+    guestParams.partition = NATIVE_BROWSER_PARTITION;
     guestParams.allowpopups = "true";
   });
   mainWindow.once("ready-to-show", () => mainWindow?.show());
@@ -439,6 +454,7 @@ ipcMain.handle("freshdesk:open-desktop-backup", async () => {
 });
 
 app.whenReady().then(() => {
+  configureBrowserSession();
   setupDownloads();
   return createWindow();
 }).catch((error) => {
