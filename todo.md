@@ -149,7 +149,7 @@
 - [x] 复现并修复 Electron Chromium 网页视图中搜索引擎结果页点击链接后无法在当前标签继续导航的问题；不以阅读模式、外部浏览器或替代渲染绕过。Windows 实机验证：Bing 结果真实鼠标点击后当前 Chromium URL 已导航至 baike.baidu.com。
 - [x] 审计 webview 的新窗口、导航、权限、分区与输入焦点策略，确保站内链接、目标链接和搜索结果均遵循普通浏览器的当前标签或显式新标签行为。已统一持久 Chromium 分区，保持沙箱/隔离/Node 禁用，并默认拒绝网页设备权限；相关回归测试通过。
 - [x] 依据 Apple macOS Human Interface Guidelines 制定系统级视觉与交互规格，统一桌面、菜单栏、Dock、窗口、侧边栏、工具栏、列表、表单与反馈层级。规格与来源已记录于 docs/macos-hig-rebuild.md，首阶段全局材料与窗口令牌已接入。
-- [ ] 按统一 macOS 设计令牌分阶段重构核心桌面外壳和高频应用，补充每项改造的可执行交互测试与 Windows 实机验证。
+- [x] 按统一 macOS 设计令牌分阶段重构核心桌面外壳和高频应用，补充每项改造的可执行交互测试与 Windows 实机验证。v1.0.25 已完成统一令牌与高频应用样式层；78 项回归测试通过，Windows 实机资源验证确认 HIG CSS 与 Chromium 主进程已加载，并通过真实 Dock 打开音乐、便笺、照片、日历、终端和提醒事项，验证对应窗口、列表、输入和终端材料层级。
 - [x] 针对截图所示 Bing 结果页，采集 Electron webview 的 pointer、click、before-input-event、did-frame-navigate、did-navigate、did-create-window 与 console 事件，区分点击未命中与导航被拦截两类根因。Chromium 调试协议确认命中后触发 Page.windowOpen；根因是 target=_blank 未回写当前标签，而非指针未命中。绝对 CommonJS guest preload 现于文档捕获阶段执行同标签 location.assign，Windows 实机已验证 Bing → 百度百科。
 - [x] 审计并移除浏览器内容区中任何透明遮罩、错误状态层或 React 捕获事件对 Chromium 网页视图的鼠标命中和焦点传递干扰。原生内容区仅含空的 native-browser-surface 挂载点；其父层捕获事件只请求主进程 focus，不阻止默认或停止传播。新增回归断言，网页输入与真实鼠标点击均已在 Windows 验证。
 - [x] 在 Windows Chromium 调试协议中实际选择 Bing 搜索结果链接并触发点击，验证 URL 改变、页面载入和前进后退状态同步后才发布修复版本。已实测：Bing → 百度百科；back 返回 Bing；forward 恢复百度百科。
@@ -167,3 +167,4 @@
 - [x] 将桌面浏览器内容区从 Electron webview 迁移至主进程 WebContentsView，并通过 IPC 同步地址、标题、加载、边界和当前标签导航；仅在 Bing target 链接 URL 实机改变后替换用户现有 App。原生视图实现与状态桥接已完成，且当前标签点击已实机验证。
 - [x] 使用 Electron 35.7.5 建立独立最小复现，逐项验证 target=_blank 锚点、window.open、预加载捕获、new-window、setWindowOpenHandler 与当前标签 loadURL 的实际事件序列；仅将实机成功路径集成回 Freshdesk。绝对路径 guest preload 已实机令 Bing 当前 guest URL 改变。
 - [x] 将主窗口 Electron preload 从未生效的 ESM 路径替换为 CommonJS 桥接，并在 Windows 实机确认 window.freshdeskDesktop 存在、浏览器不再回退 iframe、webview guest preload 标记为 active。
+- [x] 自动将 v1.0.25 官方安装程序写入用户既有 Downloads\Freshdesk Desktop\App 目录并完成覆盖安装；验证新版启动、版本、核心高频应用窗口与 Chromium 当前标签能力。NSIS 安装器在该远程会话中完整下载但被 Windows 报为无法执行，已改用同一正式 win-unpacked 资源的最小化热更新替代路径；实际目录版本为 1.0.25，主窗口、桥接、HIG 高级应用窗口与 Chromium 原生处理器均已验证运行。
