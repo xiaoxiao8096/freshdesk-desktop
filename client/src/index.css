@@ -98,6 +98,88 @@ input[type="range"] { height: 4px; accent-color: #6fa8ff; cursor: pointer; }
 .desktop-snap-preview { position: absolute; z-index: 12; top: 37px; bottom: 9px; width: calc((100% - 36px) / 2); overflow: hidden; border: 1px solid rgba(174,211,255,.52); border-radius: 13px; background: linear-gradient(135deg, rgba(111,168,255,.18), rgba(112,145,224,.1)); box-shadow: inset 0 1px rgba(255,255,255,.28), 0 14px 50px rgba(15,40,81,.16); pointer-events: none; backdrop-filter: blur(8px); animation: snap-preview-in .16s cubic-bezier(.23,1,.32,1) both; }.desktop-snap-left { left: 8px; }.desktop-snap-right { right: 8px; }.desktop-snap-preview::before { position: absolute; inset: 8px; border: 1px solid rgba(218,236,255,.22); border-radius: 8px; content: ""; }.desktop-snap-preview span { position: absolute; top: 13px; left: 15px; color: #d9e9ff; font-family: "DM Mono", monospace; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
 .desktop-snap-top-left, .desktop-snap-top-right, .desktop-snap-bottom-left, .desktop-snap-bottom-right { bottom: auto; height: calc((100% - 59px) / 2); }.desktop-snap-top-left { top: 37px; left: 8px; }.desktop-snap-top-right { top: 37px; right: 8px; }.desktop-snap-bottom-left { top: auto; bottom: 9px; left: 8px; }.desktop-snap-bottom-right { top: auto; right: 8px; bottom: 9px; }
 
+/* macOS HIG 首阶段：材料、窗口状态与导航层级的统一令牌。 */
+:root {
+  --mac-surface: rgba(29, 31, 40, .78);
+  --mac-surface-light: rgba(248, 249, 252, .82);
+  --mac-surface-elevated: rgba(43, 46, 58, .88);
+  --mac-sidebar: rgba(235, 238, 245, .63);
+  --mac-hairline: rgba(255, 255, 255, .15);
+  --mac-ink: #242936;
+  --mac-muted: #7e8797;
+  --mac-accent: #0a84ff;
+  --mac-radius-window: 14px;
+  --mac-radius-control: 8px;
+  --mac-shadow-key: 0 28px 75px rgba(0, 0, 0, .42), 0 2px 8px rgba(0, 0, 0, .18);
+  --mac-shadow-inactive: 0 16px 42px rgba(2, 5, 12, .22);
+  --mac-ease: cubic-bezier(.2, .8, .2, 1);
+}
+
+.desktop-stage { --ease-out: var(--mac-ease); }
+.system-menubar {
+  height: 28px;
+  padding-inline: 11px;
+  background: linear-gradient(90deg, rgba(21, 23, 31, .64), rgba(38, 42, 54, .42) 52%, rgba(18, 20, 28, .58));
+  border-bottom: 1px solid var(--mac-hairline);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, .18), inset 0 -1px rgba(255, 255, 255, .05);
+}
+.desktop-main { inset: 28px 0 0; }
+.app-window {
+  border-color: rgba(255, 255, 255, .56);
+  border-radius: var(--mac-radius-window);
+  background: var(--mac-surface-light);
+  box-shadow: var(--mac-shadow-inactive), inset 0 1px rgba(255, 255, 255, .74);
+  transition: box-shadow 180ms var(--mac-ease), filter 180ms var(--mac-ease), border-color 180ms var(--mac-ease);
+}
+.app-window:focus-within,
+.app-window:focus {
+  border-color: rgba(255, 255, 255, .78);
+  box-shadow: var(--mac-shadow-key), inset 0 1px rgba(255, 255, 255, .8);
+  filter: saturate(1.03);
+}
+.window-layer:not(.is-key-window) .app-window { filter: saturate(.88) brightness(.985); }
+.window-layer.is-key-window .app-window { border-color: rgba(255,255,255,.82); box-shadow: var(--mac-shadow-key), inset 0 1px rgba(255,255,255,.82); }
+.window-chrome {
+  height: 38px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .76), rgba(239, 241, 246, .62));
+  border-bottom-color: rgba(51, 57, 71, .10);
+}
+.window-title { letter-spacing: -.01em; font-weight: 650; }
+.traffic-lights { left: 14px; gap: 8px; }
+.traffic-light { width: 12px; height: 12px; box-shadow: inset 0 1px rgba(255,255,255,.32), 0 0 0 1px rgba(0,0,0,.08); }
+.finder-sidebar, .notes-sidebar, .settings-sidebar, .music-sidebar {
+  background: var(--mac-sidebar);
+  backdrop-filter: blur(24px) saturate(135%);
+  -webkit-backdrop-filter: blur(24px) saturate(135%);
+}
+.finder-sidebar button, .music-sidebar button, .settings-sidebar button { min-height: 27px; border-radius: 6px; }
+.sidebar-active, .settings-active { color: #075fbe !important; background: rgba(10,132,255,.18) !important; }
+.finder-toolbar { height: 46px; padding-inline: 18px; }
+.dock {
+  bottom: 13px;
+  gap: 6px;
+  min-height: 65px;
+  padding: 7px 10px 8px;
+  border-radius: 17px;
+  border-color: rgba(255, 255, 255, .30);
+  background: linear-gradient(180deg, rgba(58, 62, 74, .67), rgba(20, 22, 31, .54));
+  box-shadow: 0 18px 48px rgba(0,0,0,.28), inset 0 1px rgba(255,255,255,.24);
+}
+.dock-app { width: 47px; height: 52px; transition: transform 160ms var(--mac-ease); }
+.dock-app:hover { transform: translateY(-9px) scale(1.12); }
+.dock-icon { width: 42px; height: 42px; border-radius: 10px; }
+.popover-panel {
+  border-color: rgba(255,255,255,.58);
+  background: rgba(244, 246, 251, .84);
+  box-shadow: 0 24px 65px rgba(0,0,0,.28), inset 0 1px rgba(255,255,255,.72);
+}
+.setup-overlay { background: linear-gradient(100deg, rgba(7,10,18,.08), rgba(15,18,30,.16), rgba(9,11,22,.08)); backdrop-filter: blur(7px) saturate(130%); -webkit-backdrop-filter: blur(7px) saturate(130%); }
+.setup-card { border-color: rgba(212,224,247,.56); box-shadow: 0 32px 92px rgba(3,4,14,.34), inset 0 1px rgba(255,255,255,.36), inset 0 -1px rgba(2,5,13,.42), inset 0 0 0 7px rgba(255,255,255,.018); }
+.setup-mark { filter: drop-shadow(0 5px 16px rgba(79,137,236,.3)); }
+@media (prefers-reduced-motion: reduce) {
+  .app-window, .dock-app, .desktop-greeting, .popover-panel { animation: none !important; transition-duration: 1ms !important; }
+}
+
 .browser-tabstrip { display: flex; min-width: 0; height: 37px; flex: 0 0 37px; align-items: stretch; gap: 5px; padding: 5px 8px 0; border-bottom: 1px solid rgba(72,82,103,.1); background: linear-gradient(180deg, rgba(225,231,242,.96), rgba(237,241,248,.82)); }.browser-tabs { display: flex; min-width: 0; flex: 1; gap: 4px; overflow: hidden; }.browser-tab { display: flex; min-width: 96px; max-width: 180px; flex: 0 1 180px; align-items: center; overflow: hidden; border: 1px solid transparent; border-radius: 8px 8px 0 0; background: rgba(197,206,223,.34); color: #7a8596; transition: background .15s ease-out, border-color .15s ease-out; }.browser-tab.active { border-color: rgba(208,218,237,.86); border-bottom-color: rgba(255,255,255,.92); background: rgba(255,255,255,.9); color: #3d4b60; box-shadow: inset 0 1px rgba(255,255,255,.8); }.browser-tab-select { display: flex; min-width: 0; flex: 1; align-items: center; gap: 6px; padding: 0 5px 0 8px; text-align: left; }.browser-tab-select span { overflow: hidden; font-size: 9px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }.browser-tab-select i { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: #6fa8ff; box-shadow: 0 0 7px rgba(111,168,255,.8); }.browser-tab-close { display: grid; width: 22px; height: 23px; flex: 0 0 22px; place-items: center; border-radius: 5px; color: #8f9aad; }.browser-tab-close:hover { background: rgba(229,87,103,.12); color: #d75363; }.browser-tab-add, .browser-bookmarks-toggle { display: flex; align-items: center; justify-content: center; height: 26px; border-radius: 7px; color: #677488; transition: background .14s ease-out, color .14s ease-out; }.browser-tab-add { width: 28px; }.browser-bookmarks-toggle { gap: 4px; padding: 0 7px; font-size: 9px; font-weight: 700; }.browser-tab-add:hover, .browser-bookmarks-toggle:hover, .browser-bookmarks-toggle.active { background: rgba(100,150,232,.13); color: #3977c8; }
 .browser-tab { cursor: grab; }.browser-tab.dragging { opacity: .38; transform: scale(.97); }.browser-tab.pinned { min-width: 82px; flex-basis: 106px; border-left-color: rgba(111,168,255,.58); background: linear-gradient(135deg, rgba(111,168,255,.15), rgba(197,206,223,.32)); }.browser-tab.pinned .browser-tab-select > svg { color: #4c8be0; }.browser-tab-pin { display: grid; width: 20px; height: 23px; flex: 0 0 20px; place-items: center; border-radius: 5px; color: #9aa5b3; }.browser-tab-pin:hover, .browser-tab-pin.active { background: rgba(100,150,232,.14); color: #4f89dd; }.browser-tab-pin.active { transform: rotate(-12deg); }
 .browser-tab-group { position: relative; display: flex; min-width: 0; max-width: min(360px, 48%); flex: 0 1 auto; gap: 3px; padding: 0 3px 0 1px; border-bottom: 2px solid var(--group-color); background: color-mix(in srgb, var(--group-color) 9%, transparent); border-radius: 8px 8px 0 0; }.browser-tab-group.collapsed { min-width: 82px; }.browser-group-label { display: flex; min-width: 0; max-width: 102px; align-items: center; gap: 5px; padding: 0 6px; color: #617086; }.browser-group-label i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--group-color); box-shadow: 0 0 8px color-mix(in srgb, var(--group-color) 65%, transparent); }.browser-group-label span { overflow: hidden; font-size: 8px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }.browser-group-label small { color: #97a2b3; font-family: "DM Mono", monospace; font-size: 8px; }.browser-tab-group .browser-tab { min-width: 86px; max-width: 136px; flex-basis: 132px; border-top-width: 2px; }.browser-tab.grouped .browser-tab-select > svg { color: var(--group-color, #6fa8ff); }.browser-tab-group.collapsed .browser-tab { display: none; }

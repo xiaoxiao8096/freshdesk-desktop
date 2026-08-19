@@ -1769,7 +1769,7 @@ export default function Home() {
       </section>
 
       {windows.map((windowItem) => !windowItem.minimized && (
-        <div className="window-layer" key={windowItem.id} style={{ zIndex: windowItem.zIndex }}>
+        <div className={`window-layer ${activeWindowId === windowItem.id ? "is-key-window" : ""}`} key={windowItem.id} style={{ zIndex: windowItem.zIndex }}>
           {windowItem.id === "finder" && (
             <WindowChrome title="我的文件" appWindow={windowItem} onClose={() => closeApp("finder")} onMinimize={() => minimizeApp("finder")} onFocus={() => bringToFront("finder")} onMaximize={() => toggleMaximize("finder")} onBoundsChange={(bounds) => updateWindowBounds("finder", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("finder", side)} className="finder-window">
               <div className="finder-body">
@@ -1955,7 +1955,7 @@ export default function Home() {
 
       {activePanel === "about" && <section className="about-panel popover-panel" onClick={(event) => event.stopPropagation()}><img src={BRAND_MARK} alt="Freshdesk" /><div><strong>Freshdesk Desktop</strong><span>演示版 · 1.0</span></div><p>一个以新设备开机感为灵感的浏览器桌面体验。所有标识与内容均为原创。</p></section>}
 
-      {!setupComplete && <section className="setup-overlay" aria-label="新电脑设置欢迎页"><div className="setup-glow" /><div className={`setup-card ${showSetupChoice ? "expanded" : ""}`}><div className="setup-ready-line"><span /><span /><span /><span /></div><img src={BRAND_MARK} alt="Freshdesk Desktop" className="setup-mark" /><p className="setup-kicker">Freshdesk Desktop <i>·</i> System Ready</p>{!showSetupChoice ? <><h2>你好。</h2><p className="setup-copy">一个留有余白的桌面，已经为你准备好了。</p><button className="setup-primary" onClick={() => setShowSetupChoice(true)}>继续 <ChevronRight size={17} /></button><span className="setup-footnote">演示模式 · 仅在浏览器中运行</span></> : <><h2>从这里开始。</h2><p className="setup-copy">我们已为你放好几个可以探索的地方。音乐、便笺和文件都会在桌面上等你。</p><button className="setup-primary" onClick={() => setSetupComplete(true)}>进入桌面 <ChevronRight size={17} /></button><button className="setup-secondary" onClick={() => setShowSetupChoice(false)}>返回</button></>}</div></section>}
+      {!setupComplete && <section className="setup-overlay" aria-label="新电脑设置欢迎页"><div className="setup-glow" /><div className={`setup-card ${showSetupChoice ? "expanded" : ""}`}><div className="setup-ready-line"><span /><span /><span /><span /></div><img src={BRAND_MARK} alt="Freshdesk Desktop" className="setup-mark" /><p className="setup-kicker">Freshdesk Desktop <i>·</i> System Ready</p>{!showSetupChoice ? <><h2>桌面已就绪。</h2><p className="setup-copy">窗口、文件和声音都已安静地放在原位。</p><button className="setup-primary" onClick={() => setShowSetupChoice(true)}>继续 <ChevronRight size={17} /></button><span className="setup-footnote">演示模式 · 仅在浏览器中运行</span></> : <><h2>从这里开始。</h2><p className="setup-copy">我们已为你放好几个可以探索的地方。音乐、便笺和文件都会在桌面上等你。</p><button className="setup-primary" onClick={() => setSetupComplete(true)}>进入桌面 <ChevronRight size={17} /></button><button className="setup-secondary" onClick={() => setShowSetupChoice(false)}>返回</button></>}</div></section>}
 
       <div className="mobile-notice"><img src={BRAND_MARK} alt="" /><h2>请在更大的屏幕上打开</h2><p>这个桌面体验为横向电脑屏幕设计。调整窗口宽度后即可继续探索。</p></div>
     </main>
