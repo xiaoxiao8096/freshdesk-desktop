@@ -7,6 +7,7 @@ const homeSource = readFileSync(resolve(process.cwd(), "client/src/pages/Home.ts
 describe("Electron Chromium 网页视图 target 链接接管", () => {
   it("保留 webview 宿主侧 new-window 回退接管，并交由当前标签加载", () => {
     expect(homeSource).toContain('webview.addEventListener("new-window", routeGuestPopupInCurrentTab);');
+    expect(homeSource).toContain("const popupUrl = popup.url ?? popup.detail?.url;");
     expect(homeSource).toContain("popup.preventDefault?.();");
     expect(homeSource).toContain("guest.loadURL?.(popupUrl).catch(() => undefined);");
   });

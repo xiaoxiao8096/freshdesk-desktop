@@ -1049,8 +1049,8 @@ export default function Home() {
       setFrameStatus("error");
     };
     const routeGuestPopupInCurrentTab = (event: Event) => {
-      const popup = event as Event & { url?: string; preventDefault?: () => void };
-      const popupUrl = popup.url;
+      const popup = event as Event & { url?: string; detail?: { url?: string }; preventDefault?: () => void };
+      const popupUrl = popup.url ?? popup.detail?.url;
       if (!popupUrl || !/^https?:\/\//i.test(popupUrl)) return;
       // 同时在 webview 宿主侧接管 target=_blank/window.open：部分搜索引擎会在
       // 主进程拒绝新窗口后放弃同步导航，直接由当前 Chromium guest 加载可避免死链。

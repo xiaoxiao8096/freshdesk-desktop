@@ -160,3 +160,4 @@
 - [ ] 将由 Electron 本地预加载桥接生成的固定 guest 预加载 file: URL 显式传入 webview 的初始属性，验证其在首次导航前实际执行并接管 Bing 结果目标链接。
 - [ ] 使用受控、不可见的原生 target=_blank 窗口完成 Chromium 决议后，将 http/https URL 延迟交回原 guest，验证 Bing 搜索结果会在当前标签导航且不显示外部窗口。
 - [ ] 修复 webview 显式 allowpopups=false 覆盖主进程配置的问题，允许受控请求到达隐藏原生窗口接管器并验证同标签导航。
+- [ ] 兼容 webview new-window 事件将 URL 置于 CustomEvent.detail 的 Electron 版本差异，验证渲染层回退接管可从 Bing 结果读取目标并导航当前 guest。
