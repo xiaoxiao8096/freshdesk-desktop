@@ -187,7 +187,9 @@ function wireGuestNavigation(contents) {
     `).catch(() => undefined);
   };
 
-  contents.on("dom-ready", installSameTabTargetHandler);
+  // 恢复会话中的 dom-ready 可能先于 guest 监听注册完成；在文档载入后再注入，
+  // 确保每一个实际页面都得到 target 同标签拦截器。
+  contents.on("did-finish-load", installSameTabTargetHandler);
   contents.setWindowOpenHandler(({ url }) => {
     // 目标链接常在 window.open 回调内同步创建。先拒绝额外窗口；随后将导航延后
     // 到当前 guest，避免 Chromium 在弹窗请求尚未结算时丢弃这次 loadURL。

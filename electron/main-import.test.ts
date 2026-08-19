@@ -23,7 +23,7 @@ describe("Electron 主进程依赖加载", () => {
 
   it("将网站的新窗口请求限制在当前 Chromium 网页视图内，而不阻断站内确认后的跳转", () => {
     expect(mainProcessSource).toContain('guestParams.allowpopups = "true";');
-    expect(mainProcessSource).toContain('contents.on("dom-ready", installSameTabTargetHandler);');
+    expect(mainProcessSource).toContain('contents.on("did-finish-load", installSameTabTargetHandler);');
     expect(mainProcessSource).toContain('window.location.assign(anchor.href);');
     expect(mainProcessSource).toContain('event.stopImmediatePropagation();');
     expect(mainProcessSource).toContain("contents.setWindowOpenHandler(({ url }) => {");
