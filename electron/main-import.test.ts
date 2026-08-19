@@ -23,12 +23,18 @@ describe("Electron 主进程依赖加载", () => {
 
   it("将网站的新窗口请求限制在当前 Chromium 网页视图内，而不阻断站内确认后的跳转", () => {
     expect(mainProcessSource).toContain('guestParams.allowpopups = "true";');
-    expect(mainProcessSource).toContain('contents.on("did-finish-load", installSameTabTargetHandler);');
-    expect(mainProcessSource).toContain("installSameTabTargetHandler();");
-    expect(mainProcessSource).toContain('window.location.assign(anchor.href);');
-    expect(mainProcessSource).toContain('event.stopImmediatePropagation();');
+    expect(mainProcessSource).toContain('guestPreferences.preload = path.join(__dirname, "guest-preload.mjs");');
     expect(mainProcessSource).toContain("contents.setWindowOpenHandler(({ url }) => {");
     expect(mainProcessSource).toContain("setTimeout(() => contents.loadURL(url).catch(() => undefined), 24);");
     expect(mainProcessSource).toContain('return { action: "deny" };');
+  });
+
+  it("使用不暴露 Electron API 的 guest preload 将 target 链接保留在当前 Chromium 标签", () => {
+    const guestPreloadSource = readFileSync(resolve(process.cwd(), "electron/guest-preload.mjs"), "utf8");
+    expect(guestPreloadSource).toContain('document.addEventListener("click"');
+    expect(guestPreloadSource).toContain('window.location.assign(anchor.href);');
+    expect(guestPreloadSource).toContain('event.stopImmediatePropagation();');
+    expect(guestPreloadSource).not.toContain("require(");
+    expect(guestPreloadSource).not.toContain("contextBridge");
   });
 });
