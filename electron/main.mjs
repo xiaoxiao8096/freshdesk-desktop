@@ -197,7 +197,9 @@ async function createWindow() {
 
   mainWindow.webContents.on("will-attach-webview", (_event, guestPreferences, guestParams) => {
     // 预加载仅在隔离 guest 世界捕获普通 target 链接；不向网页公开任何 Node/Electron 接口。
-    guestPreferences.preload = pathToFileURL(path.join(__dirname, "guest-preload.cjs")).toString();
+    const guestPreloadUrl = pathToFileURL(path.join(__dirname, "guest-preload.cjs")).toString();
+    guestPreferences.preload = guestPreloadUrl;
+    guestParams.preload = guestPreloadUrl;
     guestPreferences.nodeIntegration = false;
     guestPreferences.contextIsolation = true;
     guestPreferences.sandbox = true;
