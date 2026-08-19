@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld("freshdeskDesktop", {
   isElectron: true,
   platform: process.platform,
   version: process.versions.electron,
+  browserGuestPreloadUrl: new URL("./guest-preload.cjs", import.meta.url).toString(),
   checkForUpdates: () => ipcRenderer.invoke("freshdesk:check-for-updates"),
   installUpdate: () => ipcRenderer.invoke("freshdesk:install-update"),
   startDownload: (request) => ipcRenderer.invoke("freshdesk:start-download", request),

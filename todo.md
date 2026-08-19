@@ -157,3 +157,4 @@
 - [ ] 以 Electron 要求的 file: URL 重新配置 guest 预加载，验证预加载就绪标记与 Bing 结果目标链接在正式 Windows 构建中均生效。
 - [ ] 将 webview 预加载由 ESM 扩展名改为 Node require 可加载的 CommonJS 文件，并在 Windows 正式构建验证当前标签目标链接接管。
 - [ ] 同时在 will-attach-webview 的参数与 guest 偏好中声明 file: CommonJS 预加载地址，验证正式 Chromium guest 的预加载就绪标记和目标链接同标签导航。
+- [ ] 将由 Electron 本地预加载桥接生成的固定 guest 预加载 file: URL 显式传入 webview 的初始属性，验证其在首次导航前实际执行并接管 Bing 结果目标链接。

@@ -14,4 +14,9 @@ describe("Electron Chromium 网页视图 target 链接接管", () => {
   it("只接管 http 和 https 网页请求，保留非网页协议的安全边界", () => {
     expect(homeSource).toContain("if (!popupUrl || !/^https?:\\/\\//i.test(popupUrl)) return;");
   });
+
+  it("在 Chromium guest 初次导航前将受控预加载 URL 传递给 webview 属性", () => {
+    expect(homeSource).toContain("const electronGuestPreloadUrl = isElectronDesktop ? window.freshdeskDesktop?.browserGuestPreloadUrl ?? \"\" : \"\";");
+    expect(homeSource).toContain("preload: electronGuestPreloadUrl");
+  });
 });

@@ -20,6 +20,7 @@ declare global {
       isElectron: boolean;
       platform: string;
       version: string;
+      browserGuestPreloadUrl: string;
       checkForUpdates: () => Promise<unknown>;
       installUpdate: () => Promise<void>;
       startDownload: (request: { id: string; url: string; title?: string }) => Promise<{ accepted: boolean; id: string }>;

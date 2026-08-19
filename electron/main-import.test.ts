@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const mainProcessSource = readFileSync(resolve(process.cwd(), "electron/main.mjs"), "utf8");
+const preloadBridgeSource = readFileSync(resolve(process.cwd(), "electron/preload.mjs"), "utf8");
 
 describe("Electron 主进程依赖加载", () => {
   it("以默认导入兼容 CommonJS 版 electron-updater", () => {
@@ -34,5 +35,9 @@ describe("Electron 主进程依赖加载", () => {
     expect(mainProcessSource).toContain("guestPreferences.nodeIntegration = false;");
     expect(mainProcessSource).toContain("guestPreferences.contextIsolation = true;");
     expect(mainProcessSource).toContain("guestPreferences.sandbox = true;");
+  });
+
+  it("仅从本地 Electron 资源向前端提供固定 guest 预加载 URL", () => {
+    expect(preloadBridgeSource).toContain('browserGuestPreloadUrl: new URL("./guest-preload.cjs", import.meta.url).toString(),');
   });
 });
