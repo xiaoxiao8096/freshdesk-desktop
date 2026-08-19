@@ -169,11 +169,23 @@ function startEmbeddedServer() {
 }
 
 function wireGuestNavigation(contents) {
+  const isWebUrl = (url) => /^https?:\/\//i.test(url);
+
+  contents.on("did-create-window", (popupWindow, details) => {
+    const popupUrl = details.url;
+    if (!isWebUrl(popupUrl)) {
+      popupWindow.destroy();
+      return;
+    }
+    // 允许 Chromium 完成 target=_blank 的创建序列，再立即关闭不可见临时窗口，
+    // 将真实导航明确交还原 guest，避免 deny 路径吞掉搜索结果链接。
+    popupWindow.destroy();
+    contents.loadURL(popupUrl).catch(() => undefined);
+  });
+
   contents.setWindowOpenHandler(({ url }) => {
-    // 目标链接常在 window.open 回调内同步创建。先拒绝额外窗口；随后将导航延后
-    // 到当前 guest，避免 Chromium 在弹窗请求尚未结算时丢弃这次 loadURL。
-    setTimeout(() => contents.loadURL(url).catch(() => undefined), 24);
-    return { action: "deny" };
+    if (!isWebUrl(url)) return { action: "deny" };
+    return { action: "allow", overrideBrowserWindowOptions: { show: false } };
   });
 }
 
@@ -197,7 +209,7 @@ async function createWindow() {
   });
 
   mainWindow.webContents.on("will-attach-webview", (_event, guestPreferences, guestParams) => {
-    guestPreferences.preload = path.join(__dirname, "guest-preload.mjs");
+    delete guestPreferences.preload;
     guestPreferences.nodeIntegration = false;
     guestPreferences.contextIsolation = true;
     guestPreferences.sandbox = true;
