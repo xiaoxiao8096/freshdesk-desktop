@@ -1901,6 +1901,7 @@ export default function Home() {
           <button className="menu-word" onClick={() => setActivePanel("about")}>帮助</button>
         </div>
         <div className="menu-right">
+          <span className="menubar-system-state" aria-label="系统状态正常"><i /><span>SYNC</span></span>
           <button className="status-icon" aria-label="打开控制中心" onClick={() => setActivePanel(activePanel === "control" ? null : "control")}><SlidersHorizontal size={16} /></button>
           <button className="status-icon" aria-label="打开聚焦搜索" onClick={() => setActivePanel(activePanel === "spotlight" ? null : "spotlight")}><Search size={16} /></button>
           <button className="time-button" onClick={() => setActivePanel(activePanel === "calendar" ? null : "calendar")}>{currentDate}&nbsp;&nbsp;{currentTime}</button>
@@ -1909,10 +1910,18 @@ export default function Home() {
 
       <section className="desktop-main" aria-label="桌面">
         <div className="desktop-greeting">
-          <div className="greeting-orbit"><span /><span /><span /><span /></div>
-          <p>Freshdesk Desktop</p>
-          <h1>把今天放到桌面上。</h1>
-          <button onClick={() => openApp("notes")}>打开第一张便笺 <ChevronRight size={15} /></button>
+          <div className="greeting-context"><span className="greeting-status-dot" /><span>今日工作区</span><em>系统已同步</em></div>
+          <h1>让每一件事，<br />各就其位。</h1>
+          <p className="greeting-copy">把窗口、文件和灵感留在同一个安静的空间里。你可以从这里继续上次的工作，也可以从一张新的便笺开始。</p>
+          <div className="greeting-actions">
+            <button className="greeting-primary" onClick={() => openApp("notes")}>新建便笺 <ChevronRight size={15} /></button>
+            <button className="greeting-secondary" onClick={() => setActivePanel("mission")}>查看总览 <Grid2X2 size={14} /></button>
+          </div>
+          <div className="greeting-metrics" aria-label="工作区状态">
+            <span><b>{windows.length}</b> 个窗口</span>
+            <span><b>{Math.max(0, reminders.length - completedReminders)}</b> 项待办</span>
+            <span><b>{isPlaying ? "正在播放" : "待命"}</b> 音乐</span>
+          </div>
         </div>
 
         <div className="desktop-icons" aria-label="桌面项目">
@@ -2146,7 +2155,7 @@ export default function Home() {
 
       {activePanel === "about" && <section className="about-panel popover-panel" onClick={(event) => event.stopPropagation()}><img src={BRAND_MARK} alt="Freshdesk" /><div><strong>Freshdesk Desktop</strong><span>演示版 · 1.0</span></div><p>一个以新设备开机感为灵感的浏览器桌面体验。所有标识与内容均为原创。</p></section>}
 
-      {!setupComplete && <section className="setup-overlay" aria-label="新电脑设置欢迎页"><div className="setup-glow" /><div className={`setup-card ${showSetupChoice ? "expanded" : ""}`}><div className="setup-ready-line"><span /><span /><span /><span /></div><img src={BRAND_MARK} alt="Freshdesk Desktop" className="setup-mark" /><p className="setup-kicker">Freshdesk Desktop <i>·</i> System Ready</p>{!showSetupChoice ? <><h2>桌面已就绪。</h2><p className="setup-copy">窗口、文件和声音都已安静地放在原位。</p><button className="setup-primary" onClick={() => setShowSetupChoice(true)}>继续 <ChevronRight size={17} /></button><span className="setup-footnote">演示模式 · 仅在浏览器中运行</span></> : <><h2>从这里开始。</h2><p className="setup-copy">我们已为你放好几个可以探索的地方。音乐、便笺和文件都会在桌面上等你。</p><button className="setup-primary" onClick={() => setSetupComplete(true)}>进入桌面 <ChevronRight size={17} /></button><button className="setup-secondary" onClick={() => setShowSetupChoice(false)}>返回</button></>}</div></section>}
+      {!setupComplete && <section className="setup-overlay" aria-label="Freshdesk Desktop 欢迎页"><div className="setup-glow" /><div className={`setup-card ${showSetupChoice ? "expanded" : ""}`}><div className="setup-status"><span /><b>Workspace online</b><em>4 个系统模块已准备</em></div><img src={BRAND_MARK} alt="Freshdesk Desktop" className="setup-mark" /><p className="setup-kicker">Freshdesk Desktop <i>·</i> Personal workspace</p>{!showSetupChoice ? <><h2>现在，开始<br />安放你的想法。</h2><p className="setup-copy">这是一个为专注而留白的工作区。窗口、文件和声音会跟随你的节奏，而不是打断它。</p><div className="setup-features"><span>窗口总览</span><span>本地文件</span><span>媒体资料库</span></div><button className="setup-primary" onClick={() => setShowSetupChoice(true)}>配置工作区 <ChevronRight size={17} /></button><span className="setup-footnote">Freshdesk Desktop · 本地优先</span></> : <><h2>从一件小事<br />开始。</h2><p className="setup-copy">便笺、文件、音乐和浏览器都已为你保留清晰的位置。随时可以用 F3 查看当前工作区。</p><button className="setup-primary" onClick={() => setSetupComplete(true)}>进入工作区 <ChevronRight size={17} /></button><button className="setup-secondary" onClick={() => setShowSetupChoice(false)}>返回欢迎页</button></>}</div></section>}
 
       <div className="mobile-notice"><img src={BRAND_MARK} alt="" /><h2>请在更大的屏幕上打开</h2><p>这个桌面体验为横向电脑屏幕设计。调整窗口宽度后即可继续探索。</p></div>
     </main>
