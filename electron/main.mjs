@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, session, shell, WebContentsView } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell, WebContentsView } from "electron";
 import electronUpdater from "electron-updater";
 import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { autoUpdater } = electronUpdater;
@@ -14,6 +15,16 @@ let nativeBrowserTabId = null;
 const pendingDownloads = new Map();
 const activeDownloads = new Map();
 const NATIVE_BROWSER_PARTITION = "persist:freshdesk-browser";
+const localFolderGrants = new Map();
+const localMediaLibrary = new Map();
+const localMediaTokens = new Map();
+const LOCAL_MEDIA_SCHEME = "freshdesk-media";
+const LOCAL_MEDIA_KINDS = {
+  music: { extensions: ["mp3", "m4a", "aac", "wav", "ogg", "flac", "opus"], filterName: "音频" },
+  photo: { extensions: ["jpg", "jpeg", "png", "webp", "gif", "bmp", "svg"], filterName: "图片" },
+};
+
+protocol.registerSchemesAsPrivileged([{ scheme: LOCAL_MEDIA_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
 
 function sendUpdateStatus(status) {
   mainWindow?.webContents.send("freshdesk:update-status", status);
@@ -121,6 +132,100 @@ function validateNativeBrowserPayload(payload, requireUrl = true) {
 
 function isDesktopRenderer(event) {
   return event.sender === mainWindow?.webContents;
+}
+
+function localLibraryPath() {
+  return path.join(app.getPath("userData"), "freshdesk-local-media-library.json");
+}
+
+function loadLocalMediaLibrary() {
+  try {
+    const raw = JSON.parse(readFileSync(localLibraryPath(), "utf8"));
+    if (!Array.isArray(raw)) return;
+    raw.filter((item) => item && typeof item.id === "string" && typeof item.sourcePath === "string" && LOCAL_MEDIA_KINDS[item.kind]).forEach((item) => localMediaLibrary.set(item.id, item));
+  } catch {
+    // The library is optional. A missing or damaged catalog must not block startup.
+  }
+}
+
+function saveLocalMediaLibrary() {
+  const entries = [...localMediaLibrary.values()].map(({ id, sourcePath, kind, name, extension, size, importedAt }) => ({ id, sourcePath, kind, name, extension, size, importedAt }));
+  writeFileSync(localLibraryPath(), JSON.stringify(entries, null, 2), "utf8");
+}
+
+function safeRelativePath(value) {
+  if (typeof value !== "string" || value.length > 480 || value.includes("\0")) throw new Error("本地路径请求无效。");
+  const normalized = value.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (normalized.startsWith("/") || normalized.split("/").some((part) => part === "..")) throw new Error("只能访问已授权位置内的文件。");
+  return normalized;
+}
+
+function isPathWithin(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function validateFolderGrant(grantId) {
+  const grant = localFolderGrants.get(grantId);
+  if (!grant) throw new Error("此文件夹授权已失效，请重新选择文件夹。");
+  return grant;
+}
+
+function resolveGrantedPath(payload) {
+  if (!payload || typeof payload !== "object" || typeof payload.grantId !== "string") throw new Error("本地文件请求无效。");
+  const grant = validateFolderGrant(payload.grantId);
+  const relativePath = safeRelativePath(payload.relativePath || "");
+  const fullPath = path.resolve(grant.root, relativePath);
+  if (!isPathWithin(grant.root, fullPath)) throw new Error("只能访问已授权文件夹内的内容。");
+  return { grant, relativePath, fullPath };
+}
+
+function localFileExtension(filePath) {
+  return path.extname(filePath).replace(/^\./, "").toLowerCase();
+}
+
+function isLocalMediaExtension(extension) {
+  return Object.values(LOCAL_MEDIA_KINDS).some((kind) => kind.extensions.includes(extension));
+}
+
+function createLocalMediaUrl(filePath, scope) {
+  const token = randomUUID();
+  localMediaTokens.set(token, { filePath, scope });
+  return `${LOCAL_MEDIA_SCHEME}://local/${token}`;
+}
+
+function clearLocalMediaTokens(predicate) {
+  for (const [token, record] of localMediaTokens.entries()) {
+    if (predicate(record)) localMediaTokens.delete(token);
+  }
+}
+
+function mediaDescriptor(record) {
+  if (!existsSync(record.sourcePath)) return null;
+  return {
+    id: record.id,
+    title: record.name,
+    extension: record.extension,
+    size: record.size,
+    importedAt: record.importedAt,
+    mediaUrl: createLocalMediaUrl(record.sourcePath, { type: "library", id: record.id }),
+  };
+}
+
+function validateMediaKind(kind) {
+  if (kind !== "music" && kind !== "photo") throw new Error("不支持的媒体类型。");
+  return kind;
+}
+
+function setupLocalMediaProtocol() {
+  protocol.handle(LOCAL_MEDIA_SCHEME, (request) => {
+    const token = new URL(request.url).pathname.slice(1);
+    const record = localMediaTokens.get(token);
+    if (!record || !existsSync(record.filePath)) return new Response("Not found", { status: 404 });
+    if (record.scope.type === "grant" && !localFolderGrants.has(record.scope.grantId)) return new Response("Authorization expired", { status: 403 });
+    if (record.scope.type === "library" && !localMediaLibrary.has(record.scope.id)) return new Response("Media removed", { status: 404 });
+    return net.fetch(pathToFileURL(record.filePath).toString());
+  });
 }
 
 function safeDownloadName(value) {
@@ -452,8 +557,113 @@ ipcMain.handle("freshdesk:open-desktop-backup", async () => {
   if (raw.length > 5 * 1024 * 1024) throw new Error("备份文件过大，未导入。");
   return { selected: true, raw, path: selected.filePaths[0] };
 });
+ipcMain.handle("freshdesk:authorize-local-folder", async (event) => {
+  if (!isDesktopRenderer(event)) throw new Error("未授权的本地文件请求。");
+  const selected = await dialog.showOpenDialog(mainWindow, {
+    title: "选择允许 Freshdesk 管理的文件夹",
+    properties: ["openDirectory"],
+  });
+  if (selected.canceled || !selected.filePaths[0]) return { authorized: false };
+  const root = path.resolve(selected.filePaths[0]);
+  const grant = { id: randomUUID(), root, name: path.basename(root) || root, grantedAt: new Date().toISOString() };
+  localFolderGrants.set(grant.id, grant);
+  return { authorized: true, grant: { id: grant.id, name: grant.name, grantedAt: grant.grantedAt } };
+});
+ipcMain.handle("freshdesk:revoke-local-folder", (event, grantId) => {
+  if (!isDesktopRenderer(event) || typeof grantId !== "string") throw new Error("未授权的本地文件请求。");
+  localFolderGrants.delete(grantId);
+  clearLocalMediaTokens((record) => record.scope.type === "grant" && record.scope.grantId === grantId);
+  return { revoked: true };
+});
+ipcMain.handle("freshdesk:list-authorized-folder", (event, payload) => {
+  if (!isDesktopRenderer(event)) throw new Error("未授权的本地文件请求。");
+  const { grant, relativePath, fullPath } = resolveGrantedPath(payload);
+  const target = statSync(fullPath);
+  if (!target.isDirectory()) throw new Error("请选择已授权文件夹中的目录。");
+  const entries = readdirSync(fullPath, { withFileTypes: true }).filter((entry) => !entry.isSymbolicLink()).slice(0, 400).map((entry) => {
+    const entryPath = path.join(fullPath, entry.name);
+    const details = statSync(entryPath);
+    const extension = entry.isDirectory() ? "" : localFileExtension(entry.name);
+    const mediaUrl = !entry.isDirectory() && isLocalMediaExtension(extension) ? createLocalMediaUrl(entryPath, { type: "grant", grantId: grant.id }) : undefined;
+    return { name: entry.name, relativePath: path.posix.join(relativePath.replace(/\\/g, "/"), entry.name), kind: entry.isDirectory() ? "directory" : "file", extension, size: details.size, modifiedAt: details.mtime.toISOString(), mediaUrl };
+  }).sort((left, right) => Number(right.kind === "directory") - Number(left.kind === "directory") || left.name.localeCompare(right.name));
+  return { grant: { id: grant.id, name: grant.name, grantedAt: grant.grantedAt }, relativePath, entries };
+});
+ipcMain.handle("freshdesk:read-authorized-text", (event, payload) => {
+  if (!isDesktopRenderer(event)) throw new Error("未授权的本地文件请求。");
+  const { fullPath } = resolveGrantedPath(payload);
+  const details = statSync(fullPath);
+  const extension = localFileExtension(fullPath);
+  if (!details.isFile() || !["txt", "md", "json", "csv", "log", "yml", "yaml"].includes(extension)) throw new Error("仅可预览已授权的文本文件。");
+  if (details.size > 1024 * 1024) throw new Error("文本文件超过 1 MB，未在应用内读取。");
+  return { content: readFileSync(fullPath, "utf8"), size: details.size };
+});
+ipcMain.handle("freshdesk:rename-authorized-entry", (event, payload) => {
+  if (!isDesktopRenderer(event) || !payload || typeof payload.name !== "string") throw new Error("未授权的本地文件请求。");
+  const { grant, relativePath, fullPath } = resolveGrantedPath(payload);
+  const name = payload.name.trim();
+  if (!name || name.length > 180 || /[\\/:*?"<>|]/.test(name) || name === "." || name === "..") throw new Error("请输入有效的新名称。");
+  const target = path.resolve(path.dirname(fullPath), name);
+  if (!isPathWithin(grant.root, target) || existsSync(target)) throw new Error("目标名称不可用或超出授权范围。");
+  renameSync(fullPath, target);
+  for (const record of localMediaLibrary.values()) if (record.sourcePath === fullPath) record.sourcePath = target;
+  saveLocalMediaLibrary();
+  return { renamed: true, relativePath: path.posix.join(path.posix.dirname(relativePath), name) };
+});
+ipcMain.handle("freshdesk:trash-authorized-entry", async (event, payload) => {
+  if (!isDesktopRenderer(event)) throw new Error("未授权的本地文件请求。");
+  const { fullPath } = resolveGrantedPath(payload);
+  await shell.trashItem(fullPath);
+  for (const [id, record] of localMediaLibrary.entries()) if (record.sourcePath === fullPath) localMediaLibrary.delete(id);
+  saveLocalMediaLibrary();
+  return { trashed: true };
+});
+ipcMain.handle("freshdesk:import-local-media", async (event, rawKind) => {
+  if (!isDesktopRenderer(event)) throw new Error("未授权的本地媒体请求。");
+  const kind = validateMediaKind(rawKind);
+  const spec = LOCAL_MEDIA_KINDS[kind];
+  const selected = await dialog.showOpenDialog(mainWindow, { title: kind === "music" ? "导入本地音乐" : "导入本地照片", properties: ["openFile", "multiSelections"], filters: [{ name: spec.filterName, extensions: spec.extensions }] });
+  if (selected.canceled) return { imported: [], skipped: [] };
+  const imported = [];
+  const skipped = [];
+  for (const sourcePath of selected.filePaths.slice(0, 300)) {
+    const extension = localFileExtension(sourcePath);
+    if (!spec.extensions.includes(extension)) { skipped.push(path.basename(sourcePath)); continue; }
+    const existing = [...localMediaLibrary.values()].find((record) => record.kind === kind && record.sourcePath === sourcePath);
+    const details = statSync(sourcePath);
+    const record = existing ?? { id: `local-${kind}-${randomUUID()}`, sourcePath, kind, name: path.basename(sourcePath), extension, size: details.size, importedAt: new Date().toISOString() };
+    localMediaLibrary.set(record.id, record);
+    const descriptor = mediaDescriptor(record);
+    if (descriptor) imported.push(descriptor);
+  }
+  saveLocalMediaLibrary();
+  return { imported, skipped };
+});
+ipcMain.handle("freshdesk:list-local-media", (event, rawKind) => {
+  if (!isDesktopRenderer(event)) throw new Error("未授权的本地媒体请求。");
+  const kind = validateMediaKind(rawKind);
+  const missing = [];
+  const items = [];
+  for (const [id, record] of localMediaLibrary.entries()) {
+    if (record.kind !== kind) continue;
+    const descriptor = mediaDescriptor(record);
+    if (descriptor) items.push(descriptor); else missing.push(id);
+  }
+  missing.forEach((id) => localMediaLibrary.delete(id));
+  if (missing.length) saveLocalMediaLibrary();
+  return items.sort((left, right) => right.importedAt.localeCompare(left.importedAt));
+});
+ipcMain.handle("freshdesk:remove-local-media", (event, id) => {
+  if (!isDesktopRenderer(event) || typeof id !== "string") throw new Error("未授权的本地媒体请求。");
+  localMediaLibrary.delete(id);
+  clearLocalMediaTokens((record) => record.scope.type === "library" && record.scope.id === id);
+  saveLocalMediaLibrary();
+  return { removed: true };
+});
 
 app.whenReady().then(() => {
+  setupLocalMediaProtocol();
+  loadLocalMediaLibrary();
   configureBrowserSession();
   setupDownloads();
   return createWindow();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bringWindowToFront, clampRestoredWindowBounds, closeAllWindows, closeWindowById, minimizeAllWindows, nextVisibleWindowAfterAction, orderWindowsByZIndex, sanitizeRestoredWindows, topVisibleWindow } from "./windowState";
+import { assignWindowToGroup, bringWindowGroupToFront, bringWindowToFront, clampRestoredWindowBounds, closeAllWindows, closeWindowById, minimizeAllWindows, nextVisibleWindowAfterAction, orderWindowsByZIndex, removeWindowGroup, sanitizeRestoredWindows, setWindowGroupMinimized, topVisibleWindow, windowIdsForGroup } from "./windowState";
 
 const windows = [
   { id: "finder", minimized: false, zIndex: 26 },
@@ -42,5 +42,18 @@ describe("window state", () => {
 
   it("does not rewrite window state when an already frontmost browser receives another input focus event", () => {
     expect(bringWindowToFront(windows, "browser")).toBe(windows);
+  });
+
+  it("can assign, inspect and remove a window group without closing its members", () => {
+    const grouped = assignWindowToGroup(assignWindowToGroup(windows, "finder", "research"), "browser", "research");
+    expect(windowIdsForGroup(grouped, "research")).toEqual(["finder", "browser"]);
+    expect(removeWindowGroup(grouped, "research").every((windowItem) => !windowItem.groupId)).toBe(true);
+  });
+
+  it("raises or minimizes every member of a window group together", () => {
+    const grouped = windows.map((windowItem) => windowItem.id === "finder" || windowItem.id === "notes" ? { ...windowItem, groupId: "writing" } : windowItem);
+    const focused = bringWindowGroupToFront(grouped, "writing");
+    expect(topVisibleWindow(focused)?.id).toBe("notes");
+    expect(setWindowGroupMinimized(focused, "writing", true).filter((windowItem) => windowItem.groupId === "writing").every((windowItem) => windowItem.minimized)).toBe(true);
   });
 });

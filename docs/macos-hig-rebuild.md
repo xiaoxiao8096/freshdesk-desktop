@@ -31,6 +31,10 @@ Freshdesk Desktop 不试图伪造 macOS 的系统级身份，而是采用 macOS 
 
 第一阶段建立全局材料、窗口状态和内容层级，重构菜单栏、Dock 与窗口框架。第二阶段将 Finder、Safari 与设置的工具栏和侧边栏迁移至统一结构。第三阶段对其余应用补充列表、检查器、空状态与键盘快捷键的一致性验证。2026-08-19 的实现将音乐、照片、便笺、日历、提醒事项和终端纳入同一层级：工具栏只承载当前上下文与少量高频操作，侧边栏维持不超过两级的导航，列表使用持续选中态或完成标记，简短输入保留提示与清晰焦点环，终端使用独立的深色内容材料。[5] [6] [7] [8]
 
+第四阶段扩展为多任务与本地内容工作流。Mission Control 以全屏、可键盘操作的窗口缩略图网格呈现现有窗口和用户命名的窗口组；进入总览不修改任何窗口内容，选择后只聚焦对应窗口。窗口交通灯在视觉上保持克制，但每个按钮的实际点击区域至少为 28px，并始终保留焦点指示。为减少长时间使用时的卡顿感，常用按钮只过渡 `transform` 和 `opacity`，窗口移动时不触发昂贵的滤镜或阴影动画。
+
+本地文件能力采用“用户选择、最小授权、可撤销”模型：渲染进程不获取 Node 或任意文件路径读取权限；仅由主进程通过附着到主窗口的原生选择器选取文件或目录，再通过特定的 `contextBridge` 方法返回受控媒体描述符。主进程验证调用方、文件类型和授权范围，并使用临时媒体 URL 提供图片或音频预览；撤销授权后，这些 URL 立即失效。Electron 官方 IPC 指南建议仅暴露最小 API 表面，原生 `showOpenDialog` 支持过滤器与多选，而自定义协议需要在主进程中验证路径以防目录穿越。[9] [10] [11]
+
 ## 参考资料
 
 [1] [Apple, Designing for macOS](https://developer.apple.com/design/human-interface-guidelines/designing-for-macos)
@@ -48,3 +52,9 @@ Freshdesk Desktop 不试图伪造 macOS 的系统级身份，而是采用 macOS 
 [7] [Apple, Toolbars](https://developer.apple.com/design/human-interface-guidelines/toolbars)
 
 [8] [Apple, Sidebars](https://developer.apple.com/design/human-interface-guidelines/sidebars)
+
+[9] [Electron, Inter-Process Communication](https://www.electronjs.org/docs/latest/tutorial/ipc)
+
+[10] [Electron, dialog](https://www.electronjs.org/docs/latest/api/dialog)
+
+[11] [Electron, protocol](https://www.electronjs.org/docs/latest/api/protocol)

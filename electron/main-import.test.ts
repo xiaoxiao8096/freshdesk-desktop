@@ -34,7 +34,7 @@ describe("Electron 主进程依赖加载", () => {
   });
 
   it("使用原生 WebContentsView 将 target 链接安全留在当前 Chromium 标签", () => {
-    expect(mainProcessSource).toContain('import { app, BrowserWindow, dialog, ipcMain, session, shell, WebContentsView } from "electron";');
+    expect(mainProcessSource).toContain('import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell, WebContentsView } from "electron";');
     expect(mainProcessSource).toContain("const view = new WebContentsView({");
     expect(mainProcessSource).toContain('partition: NATIVE_BROWSER_PARTITION,');
     expect(mainProcessSource).toContain('preload: path.join(__dirname, "guest-preload.cjs"),');
@@ -71,5 +71,22 @@ describe("Electron 主进程依赖加载", () => {
     expect(mainProcessSource).toContain("browserSession.setPermissionRequestHandler");
     expect(mainProcessSource).toContain("callback(false);");
     expect(mainProcessSource).toContain("configureBrowserSession();");
+  });
+
+  it("将本地 Finder 与媒体库限制为用户选择的授权根和受控媒体协议", () => {
+    expect(mainProcessSource).toContain('ipcMain.handle("freshdesk:authorize-local-folder"');
+    expect(mainProcessSource).toContain('properties: ["openDirectory"]');
+    expect(mainProcessSource).toContain("function resolveGrantedPath(payload)");
+    expect(mainProcessSource).toContain("function isPathWithin(root, candidate)");
+    expect(mainProcessSource).toContain("function safeRelativePath(value)");
+    expect(mainProcessSource).toContain('ipcMain.handle("freshdesk:list-authorized-folder"');
+    expect(mainProcessSource).toContain('ipcMain.handle("freshdesk:trash-authorized-entry"');
+    expect(mainProcessSource).toContain('await shell.trashItem(fullPath);');
+    expect(mainProcessSource).toContain('ipcMain.handle("freshdesk:import-local-media"');
+    expect(mainProcessSource).toContain('const LOCAL_MEDIA_SCHEME = "freshdesk-media";');
+    expect(mainProcessSource).toContain("protocol.handle(LOCAL_MEDIA_SCHEME");
+    expect(preloadBridgeSource).toContain('authorizeLocalFolder: () => ipcRenderer.invoke("freshdesk:authorize-local-folder")');
+    expect(preloadBridgeSource).toContain('importLocalMedia: (kind) => ipcRenderer.invoke("freshdesk:import-local-media", kind)');
+    expect(preloadBridgeSource).not.toContain("sendSync");
   });
 });

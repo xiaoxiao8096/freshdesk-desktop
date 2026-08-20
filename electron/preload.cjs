@@ -18,6 +18,15 @@ contextBridge.exposeInMainWorld("freshdeskDesktop", {
   exportDesktopState: (payload) => ipcRenderer.invoke("freshdesk:export-desktop-state", payload),
   backupDesktopState: (payload) => ipcRenderer.invoke("freshdesk:backup-desktop-state", payload),
   openDesktopBackup: () => ipcRenderer.invoke("freshdesk:open-desktop-backup"),
+  authorizeLocalFolder: () => ipcRenderer.invoke("freshdesk:authorize-local-folder"),
+  revokeLocalFolder: (grantId) => ipcRenderer.invoke("freshdesk:revoke-local-folder", grantId),
+  listAuthorizedFolder: (payload) => ipcRenderer.invoke("freshdesk:list-authorized-folder", payload),
+  readAuthorizedText: (payload) => ipcRenderer.invoke("freshdesk:read-authorized-text", payload),
+  renameAuthorizedEntry: (payload) => ipcRenderer.invoke("freshdesk:rename-authorized-entry", payload),
+  trashAuthorizedEntry: (payload) => ipcRenderer.invoke("freshdesk:trash-authorized-entry", payload),
+  importLocalMedia: (kind) => ipcRenderer.invoke("freshdesk:import-local-media", kind),
+  listLocalMedia: (kind) => ipcRenderer.invoke("freshdesk:list-local-media", kind),
+  removeLocalMedia: (id) => ipcRenderer.invoke("freshdesk:remove-local-media", id),
   onUpdateStatus: (listener) => {
     const handler = (_event, status) => listener(status);
     ipcRenderer.on("freshdesk:update-status", handler);

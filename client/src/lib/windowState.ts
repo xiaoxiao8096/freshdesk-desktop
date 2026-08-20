@@ -2,6 +2,13 @@ export type WindowStateItem = {
   id: string;
   minimized: boolean;
   zIndex: number;
+  groupId?: string;
+};
+
+export type WindowGroupItem = {
+  id: string;
+  title: string;
+  color: string;
 };
 
 export type RestoredWindowBounds = {
@@ -50,6 +57,31 @@ export function bringWindowToFront<T extends WindowStateItem>(windows: T[], id: 
   if (target && !target.minimized && currentTop?.id === id) return windows;
   const top = Math.max(25, ...windows.map((windowItem) => windowItem.zIndex));
   return windows.map((windowItem) => windowItem.id === id ? { ...windowItem, minimized: false, zIndex: top + 1 } : windowItem);
+}
+
+export function windowIdsForGroup<T extends WindowStateItem>(windows: T[], groupId: string) {
+  return windows.filter((windowItem) => windowItem.groupId === groupId).map((windowItem) => windowItem.id);
+}
+
+export function assignWindowToGroup<T extends WindowStateItem>(windows: T[], id: T["id"], groupId?: string) {
+  return windows.map((windowItem) => windowItem.id === id ? { ...windowItem, groupId } : windowItem);
+}
+
+export function removeWindowGroup<T extends WindowStateItem>(windows: T[], groupId: string) {
+  return windows.map((windowItem) => windowItem.groupId === groupId ? { ...windowItem, groupId: undefined } : windowItem);
+}
+
+export function bringWindowGroupToFront<T extends WindowStateItem>(windows: T[], groupId: string) {
+  const members = windows.filter((windowItem) => windowItem.groupId === groupId);
+  if (!members.length) return windows;
+  const top = Math.max(25, ...windows.map((windowItem) => windowItem.zIndex));
+  const memberOrder = [...members].sort((left, right) => left.zIndex - right.zIndex);
+  const nextIndex = new Map(memberOrder.map((windowItem, index) => [windowItem.id, top + index + 1]));
+  return windows.map((windowItem) => nextIndex.has(windowItem.id) ? { ...windowItem, minimized: false, zIndex: nextIndex.get(windowItem.id)! } : windowItem);
+}
+
+export function setWindowGroupMinimized<T extends WindowStateItem>(windows: T[], groupId: string, minimized: boolean) {
+  return windows.map((windowItem) => windowItem.groupId === groupId ? { ...windowItem, minimized } : windowItem);
 }
 
 export function nextVisibleWindowAfterAction<T extends WindowStateItem>(windows: T[], id: T["id"], action: "close" | "minimize") {

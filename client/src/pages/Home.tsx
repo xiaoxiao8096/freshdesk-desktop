@@ -2,6 +2,7 @@
  * 设计提醒：雾面硬件主义。以桌面空间关系组织内容，所有反馈要像精密设备一样安静、迅速、可信。
  */
 import { createElement, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import "@/local-media.css";
 import { trpc } from "@/lib/trpc";
 import { searchVirtualFiles } from "@/lib/finderSearch";
 import { appendNavigationRoute, getNavigationStep, synchronizeGuestHistoryStep } from "@/lib/browserNavigation";
@@ -9,7 +10,7 @@ import { resolveBrowserVideo, type BrowserVideoSource } from "@/lib/browserVideo
 import { postTikTokPlayerCommand, type TikTokPlayerCommand } from "@/lib/tiktokPlayer";
 import { HlsVideoPlayer } from "@/components/HlsVideoPlayer";
 import { NativeVideoPlayer } from "@/components/NativeVideoPlayer";
-import { bringWindowToFront, clampRestoredWindowBounds, closeAllWindows, closeWindowById, minimizeAllWindows, nextVisibleWindowAfterAction, orderWindowsByZIndex, sanitizeRestoredWindows, topVisibleWindow } from "@/lib/windowState";
+import { assignWindowToGroup, bringWindowGroupToFront, bringWindowToFront, clampRestoredWindowBounds, closeAllWindows, closeWindowById, minimizeAllWindows, nextVisibleWindowAfterAction, orderWindowsByZIndex, removeWindowGroup, sanitizeRestoredWindows, setWindowGroupMinimized, topVisibleWindow } from "@/lib/windowState";
 import { recordRecentVideo } from "@/lib/recentVideos";
 import { loadStoredSnapshot } from "@/lib/desktopSnapshot";
 import { createDesktopBackup, desktopBackupFilename, parseDesktopBackup } from "@/lib/desktopBackup";
@@ -193,7 +194,16 @@ type PhotoItem = {
   alt: string;
   title: string;
   subtitle: string;
+  local?: boolean;
 };
+
+type LocalFinderState = {
+  grant: FreshdeskLocalFolderGrant;
+  relativePath: string;
+  entries: FreshdeskLocalFileEntry[];
+};
+
+type LocalFinderPreview = { name: string; content?: string; mediaUrl?: string };
 
 type WallpaperItem = {
   id: string;
@@ -253,11 +263,19 @@ type AppWindow = {
   bounds: WindowBounds;
   maximized: boolean;
   restoreBounds?: WindowBounds;
+  groupId?: string;
+};
+
+type DesktopWindowGroup = {
+  id: string;
+  title: string;
+  color: string;
 };
 
 type DesktopSnapshot = Partial<{
   setupComplete: boolean;
   windows: AppWindow[];
+  windowGroups: DesktopWindowGroup[];
   activeWallpaperId: string;
   customWallpapers: WallpaperItem[];
   notes: NoteDocument[];
@@ -395,6 +413,8 @@ const defaultWindowBounds: Record<AppName, WindowBounds> = {
   editor: { x: 380, y: 82, width: 680, height: 520 },
 };
 
+const windowGroupColors = ["#0a84ff", "#bf5af2", "#ff9f0a", "#30d158", "#ff6482"];
+
 function formatDuration(value: number) {
   if (!Number.isFinite(value)) return "0:00";
   const minutes = Math.floor(value / 60);
@@ -491,8 +511,39 @@ function WindowChrome({
   className?: string;
 }) {
   const interactionRef = useRef<{ pointerId: number; mode: "drag" | "resize"; direction?: string; startX: number; startY: number; bounds: WindowBounds } | null>(null);
+  const interactionFrameRef = useRef<number | null>(null);
+  const pendingInteractionRef = useRef<{ bounds: WindowBounds; snapTarget: SnapTarget | null } | null>(null);
   const minWidth = 360;
   const minHeight = 240;
+
+  const flushInteractionFrame = () => {
+    if (interactionFrameRef.current !== null) {
+      window.cancelAnimationFrame(interactionFrameRef.current);
+      interactionFrameRef.current = null;
+    }
+    const pending = pendingInteractionRef.current;
+    pendingInteractionRef.current = null;
+    if (!pending) return;
+    onBoundsChange(pending.bounds);
+    onSnapPreviewChange?.(pending.snapTarget);
+  };
+
+  const queueInteractionFrame = (bounds: WindowBounds, snapTarget: SnapTarget | null) => {
+    pendingInteractionRef.current = { bounds, snapTarget };
+    if (interactionFrameRef.current !== null) return;
+    interactionFrameRef.current = window.requestAnimationFrame(() => {
+      interactionFrameRef.current = null;
+      const pending = pendingInteractionRef.current;
+      pendingInteractionRef.current = null;
+      if (!pending) return;
+      onBoundsChange(pending.bounds);
+      onSnapPreviewChange?.(pending.snapTarget);
+    });
+  };
+
+  useEffect(() => () => {
+    if (interactionFrameRef.current !== null) window.cancelAnimationFrame(interactionFrameRef.current);
+  }, []);
 
   const beginInteraction = (event: ReactPointerEvent<HTMLElement>, mode: "drag" | "resize", direction?: string) => {
     if (appWindow.maximized) return;
@@ -500,6 +551,7 @@ function WindowChrome({
     event.stopPropagation();
     onFocus();
     interactionRef.current = { pointerId: event.pointerId, mode, direction, startX: event.clientX, startY: event.clientY, bounds: appWindow.bounds };
+    event.currentTarget.closest<HTMLElement>(".app-window")?.classList.add("is-interacting");
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
@@ -513,10 +565,11 @@ function WindowChrome({
     const base = interaction.bounds;
     let next: WindowBounds = { ...base };
 
+    let snapTarget: SnapTarget | null = null;
     if (interaction.mode === "drag") {
       next.x = Math.min(Math.max(8, base.x + dx), viewportWidth - 150);
       next.y = Math.min(Math.max(30, base.y + dy), viewportHeight - 105);
-      onSnapPreviewChange?.(detectSnapTarget(event.clientX, event.clientY, viewportWidth, viewportHeight));
+      snapTarget = detectSnapTarget(event.clientX, event.clientY, viewportWidth, viewportHeight);
     } else {
       const direction = interaction.direction ?? "";
       if (direction.includes("right")) next.width = Math.min(Math.max(minWidth, base.width + dx), viewportWidth - base.x - 8);
@@ -532,12 +585,13 @@ function WindowChrome({
         next.height = height;
       }
     }
-    onBoundsChange(next);
+    queueInteractionFrame(next, snapTarget);
   };
 
   const endInteraction = (event: ReactPointerEvent<HTMLElement>) => {
     const interaction = interactionRef.current;
     if (interaction?.pointerId !== event.pointerId) return;
+    flushInteractionFrame();
     if (interaction.mode === "drag") {
       const target = detectSnapTarget(event.clientX, event.clientY, window.innerWidth, window.innerHeight);
       onSnapPreviewChange?.(null);
@@ -545,6 +599,7 @@ function WindowChrome({
       if (target && !onSnap) onBoundsChange(getSnapBounds(target));
     }
     interactionRef.current = null;
+    event.currentTarget.closest<HTMLElement>(".app-window")?.classList.remove("is-interacting");
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
 
@@ -597,8 +652,9 @@ export default function Home() {
   });
   const [showSetupChoice, setShowSetupChoice] = useState(false);
   const [windows, setWindows] = useState<AppWindow[]>(() => sanitizeRestoredWindows(restoredDesktopState?.windows).map(clampRestoredWindow));
+  const [windowGroups, setWindowGroups] = useState<DesktopWindowGroup[]>(() => restoredDesktopState?.windowGroups ?? []);
   const [activeWindowId, setActiveWindowId] = useState<AppName | null>(() => topVisibleWindow(sanitizeRestoredWindows(restoredDesktopState?.windows).map(clampRestoredWindow))?.id ?? null);
-  const [activePanel, setActivePanel] = useState<"control" | "spotlight" | "calendar" | "about" | "windows" | null>(null);
+  const [activePanel, setActivePanel] = useState<"control" | "spotlight" | "calendar" | "about" | "windows" | "mission" | null>(null);
   const [selectedDesktop, setSelectedDesktop] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
   const [wifi, setWifi] = useState(true);
@@ -678,6 +734,13 @@ export default function Home() {
   const [finderSearchScope, setFinderSearchScope] = useState<"current" | "downloads" | "pictures">("current");
   const [finderContextMenu, setFinderContextMenu] = useState<FinderContextMenu | null>(null);
   const [fileInfoPath, setFileInfoPath] = useState<string | null>(null);
+  const [localFinder, setLocalFinder] = useState<LocalFinderState | null>(null);
+  const [localFinderLoading, setLocalFinderLoading] = useState(false);
+  const [localFinderStatus, setLocalFinderStatus] = useState("本地文件需要你主动选择文件夹后才会显示。");
+  const [localFinderPreview, setLocalFinderPreview] = useState<LocalFinderPreview | null>(null);
+  const [localMusic, setLocalMusic] = useState<FreshdeskLocalMediaItem[]>([]);
+  const [localPhotos, setLocalPhotos] = useState<FreshdeskLocalMediaItem[]>([]);
+  const [localMediaStatus, setLocalMediaStatus] = useState("本地媒体仅在你主动导入后显示。");
   const [weatherLocationId, setWeatherLocationId] = useState("shanghai");
   const [weatherUnit, setWeatherUnit] = useState<"c" | "f">(() => restoredDesktopState?.weatherUnit ?? "c");
   const [weatherUpdatedAt, setWeatherUpdatedAt] = useState(() => new Date());
@@ -710,16 +773,18 @@ export default function Home() {
       { title: "Idle Sequence", artist: "Freshdesk Studio", cover: ALBUM_ORBIT, time: "2:30", src: MUSIC },
       { title: "Morning Window", artist: "Freshdesk Studio", cover: WALLPAPER_ALPINE, time: "2:30", src: MUSIC_MORNING },
       { title: "Night Orbit", artist: "Freshdesk Studio", cover: ALBUM_TIDE, time: "2:30", src: MUSIC_NIGHT },
+      ...localMusic.map((item) => ({ title: item.title, artist: "本地资料库", cover: ALBUM_ORBIT, time: "本地", src: item.mediaUrl, localId: item.id })),
     ],
-    [],
+    [localMusic],
   );
 
-  const current = tracks[currentTrack];
+  const current = tracks[Math.min(currentTrack, Math.max(0, tracks.length - 1))] ?? tracks[0];
   const activeBrowserTab = browserTabs.find((tab) => tab.id === activeBrowserTabId) ?? browserTabs[0];
   const availableWallpapers = [...wallpapers, ...customWallpapers];
   const activeWallpaper = availableWallpapers.find((wallpaper) => wallpaper.id === activeWallpaperId) ?? wallpapers[0];
   const activeNote = notes.find((item) => item.id === activeNoteId) ?? notes[0];
-  const selectedPhoto = photoItems.find((item) => item.id === selectedPhotoId) ?? null;
+  const allPhotoItems = useMemo<PhotoItem[]>(() => [...photoItems, ...localPhotos.map((item) => ({ id: item.id, src: item.mediaUrl, alt: item.title, title: item.title, subtitle: `本地资料库 · ${new Date(item.importedAt).toLocaleDateString("zh-CN")}`, local: true }))], [localPhotos]);
+  const selectedPhoto = allPhotoItems.find((item) => item.id === selectedPhotoId) ?? null;
   const currentWeather = liveWeather ?? weatherLocations.find((location) => location.id === weatherLocationId) ?? weatherLocations[0];
   const completedReminders = reminders.filter((item) => item.done).length;
   const finderEntries = virtualDirectoryEntries(virtualFileSystem, finderPath);
@@ -729,6 +794,8 @@ export default function Home() {
     return searchVirtualFiles({ files: virtualFileSystem.files, home: VIRTUAL_HOME, currentPath: finderPath, scope: finderSearchScope, query }).map((path) => ({ name: virtualName(path), type: "file" as const, path }));
   }, [finderPath, finderSearch, finderSearchScope, virtualFileSystem.files]);
   const visibleFinderEntries = finderSearch.trim() ? finderSearchResults : finderEntries;
+  const missionGroups = useMemo(() => windowGroups.map((group) => ({ ...group, windows: orderWindowsByZIndex(windows.filter((windowItem) => windowItem.groupId === group.id)) })).filter((group) => group.windows.length), [windowGroups, windows]);
+  const ungroupedMissionWindows = useMemo(() => orderWindowsByZIndex(windows.filter((windowItem) => !windowItem.groupId)), [windows]);
   const readerInput = useMemo(() => ({ url: /^https?:\/\//i.test(activeBrowserTab?.url ?? "") ? activeBrowserTab.url : "https://example.com" }), [activeBrowserTab?.url]);
   const readerQuery = trpc.browser.readPage.useQuery(readerInput, { enabled: activeBrowserTab?.mode === "reader", retry: false, refetchOnWindowFocus: false });
   const embedInspectionQuery = trpc.browser.inspectEmbed.useQuery(readerInput, { enabled: activeBrowserTab?.mode === "web", retry: false, staleTime: 60_000 });
@@ -843,6 +910,88 @@ export default function Home() {
     setFinderContextMenu({ path, x: event.clientX, y: event.clientY });
   };
 
+  const refreshLocalFinder = async (grantId: string, relativePath = "") => {
+    if (!window.freshdeskDesktop?.listAuthorizedFolder) return;
+    setLocalFinderLoading(true);
+    try {
+      const result = await window.freshdeskDesktop.listAuthorizedFolder({ grantId, relativePath });
+      setLocalFinder({ grant: result.grant, relativePath: result.relativePath, entries: result.entries });
+      setLocalFinderStatus(`${result.grant.name}${result.relativePath ? ` · ${result.relativePath}` : ""} · ${result.entries.length} 个项目`);
+    } catch (error) {
+      setLocalFinder(null);
+      setLocalFinderStatus(error instanceof Error ? error.message : "无法读取已授权文件夹。");
+    } finally {
+      setLocalFinderLoading(false);
+    }
+  };
+
+  const authorizeLocalFinder = async () => {
+    if (!window.freshdeskDesktop?.authorizeLocalFolder) { setLocalFinderStatus("本地文件授权仅在 Windows 桌面版中可用。"); return; }
+    const result = await window.freshdeskDesktop.authorizeLocalFolder();
+    if (!result.authorized || !result.grant) { setLocalFinderStatus("未选择文件夹，当前桌面数据未发生变化。"); return; }
+    await refreshLocalFinder(result.grant.id);
+  };
+
+  const openLocalFinderEntry = async (entry: FreshdeskLocalFileEntry) => {
+    if (!localFinder || !window.freshdeskDesktop) return;
+    if (entry.kind === "directory") { await refreshLocalFinder(localFinder.grant.id, entry.relativePath); return; }
+    if (entry.mediaUrl) { setLocalFinderPreview({ name: entry.name, mediaUrl: entry.mediaUrl }); return; }
+    try {
+      const result = await window.freshdeskDesktop.readAuthorizedText({ grantId: localFinder.grant.id, relativePath: entry.relativePath });
+      setLocalFinderPreview({ name: entry.name, content: result.content });
+    } catch (error) {
+      setLocalFinderStatus(error instanceof Error ? error.message : "该文件暂时无法预览。");
+    }
+  };
+
+  const renameLocalFinderEntry = async (entry: FreshdeskLocalFileEntry) => {
+    if (!localFinder || !window.freshdeskDesktop?.renameAuthorizedEntry) return;
+    const name = window.prompt(`重命名“${entry.name}”`, entry.name)?.trim();
+    if (!name || name === entry.name) return;
+    try {
+      await window.freshdeskDesktop.renameAuthorizedEntry({ grantId: localFinder.grant.id, relativePath: entry.relativePath, name });
+      await refreshLocalFinder(localFinder.grant.id, localFinder.relativePath);
+    } catch (error) {
+      setLocalFinderStatus(error instanceof Error ? error.message : "重命名未完成。");
+    }
+  };
+
+  const trashLocalFinderEntry = async (entry: FreshdeskLocalFileEntry) => {
+    if (!localFinder || !window.freshdeskDesktop?.trashAuthorizedEntry) return;
+    if (!window.confirm(`将“${entry.name}”移到系统回收站？原文件将由 Windows 回收站保留。`)) return;
+    try {
+      await window.freshdeskDesktop.trashAuthorizedEntry({ grantId: localFinder.grant.id, relativePath: entry.relativePath });
+      await refreshLocalFinder(localFinder.grant.id, localFinder.relativePath);
+      if (entry.extension && ["jpg", "jpeg", "png", "webp", "gif", "bmp", "svg"].includes(entry.extension)) setLocalPhotos((items) => items.filter((item) => item.title !== entry.name));
+      if (entry.extension && ["mp3", "m4a", "aac", "wav", "ogg", "flac", "opus"].includes(entry.extension)) setLocalMusic((items) => items.filter((item) => item.title !== entry.name));
+    } catch (error) {
+      setLocalFinderStatus(error instanceof Error ? error.message : "移动到回收站未完成。");
+    }
+  };
+
+  const importLocalMedia = async (kind: "music" | "photo") => {
+    if (!window.freshdeskDesktop?.importLocalMedia) { setLocalMediaStatus("本地媒体导入仅在 Windows 桌面版中可用。"); return; }
+    try {
+      const result = await window.freshdeskDesktop.importLocalMedia(kind);
+      const label = kind === "music" ? "音乐" : "照片";
+      if (result.imported.length) {
+        if (kind === "music") setLocalMusic((items) => [...result.imported, ...items.filter((item) => !result.imported.some((next) => next.id === item.id))]);
+        else setLocalPhotos((items) => [...result.imported, ...items.filter((item) => !result.imported.some((next) => next.id === item.id))]);
+        setLocalMediaStatus(`已导入 ${result.imported.length} 项${label}${result.skipped.length ? `；跳过 ${result.skipped.length} 个不支持的文件` : ""}。`);
+      } else setLocalMediaStatus(`未导入${label}，当前资料库未发生变化。`);
+    } catch (error) {
+      setLocalMediaStatus(error instanceof Error ? error.message : "导入未完成。");
+    }
+  };
+
+  const removeLocalMedia = async (kind: "music" | "photo", id: string) => {
+    if (!window.freshdeskDesktop?.removeLocalMedia) return;
+    await window.freshdeskDesktop.removeLocalMedia(id);
+    if (kind === "music") setLocalMusic((items) => items.filter((item) => item.id !== id));
+    else { setLocalPhotos((items) => items.filter((item) => item.id !== id)); setSelectedPhotoId((selected) => selected === id ? null : selected); }
+    setLocalMediaStatus("已从 Freshdesk 资料库移除；源文件仍保留在原位置。");
+  };
+
   const fetchLiveWeather = async (rawCity = weatherSearch) => {
     const city = rawCity.trim();
     if (!city) { setWeatherError("请输入城市名称，例如：上海、北京或 Tokyo。"); return; }
@@ -879,9 +1028,22 @@ export default function Home() {
 
   const movePhoto = (direction: 1 | -1) => {
     if (!selectedPhotoId) return;
-    const index = Math.max(0, photoItems.findIndex((photo) => photo.id === selectedPhotoId));
-    setSelectedPhotoId(photoItems[(index + direction + photoItems.length) % photoItems.length].id);
+    const index = Math.max(0, allPhotoItems.findIndex((photo) => photo.id === selectedPhotoId));
+    setSelectedPhotoId(allPhotoItems[(index + direction + allPhotoItems.length) % allPhotoItems.length]?.id ?? null);
   };
+
+  useEffect(() => {
+    if (!isElectronDesktop || !window.freshdeskDesktop?.listLocalMedia) return;
+    void Promise.all([window.freshdeskDesktop.listLocalMedia("music"), window.freshdeskDesktop.listLocalMedia("photo")]).then(([music, photos]) => {
+      setLocalMusic(music);
+      setLocalPhotos(photos);
+      if (music.length || photos.length) setLocalMediaStatus(`已加载本机资料库：${music.length} 首音乐、${photos.length} 张照片。`);
+    }).catch(() => setLocalMediaStatus("本机资料库暂时不可用；导入操作不会影响现有内容。"));
+  }, [isElectronDesktop]);
+
+  useEffect(() => {
+    if (currentTrack >= tracks.length) setCurrentTrack(0);
+  }, [currentTrack, tracks.length]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 15_000);
@@ -892,6 +1054,13 @@ export default function Home() {
     const activeStillVisible = activeWindowId && windows.some((windowItem) => windowItem.id === activeWindowId && !windowItem.minimized);
     if (!activeStillVisible) setActiveWindowId(topVisibleWindow(windows)?.id ?? null);
   }, [activeWindowId, windows]);
+
+  useEffect(() => {
+    setWindowGroups((groups) => {
+      const next = groups.filter((group) => windows.some((windowItem) => windowItem.groupId === group.id));
+      return next.length === groups.length ? groups : next;
+    });
+  }, [windows]);
 
   useEffect(() => {
     if (!activeWindowId) return;
@@ -908,13 +1077,13 @@ export default function Home() {
   }, [setupComplete]);
 
   useEffect(() => {
-    const snapshot: DesktopSnapshot = { setupComplete, windows, activeWallpaperId, customWallpapers, notes, activeNoteId, virtualFileSystem, fileContents, trashItems, finderPath, systemAppearance, volume, currentTrack, browserTabs, activeBrowserTabId, browserTabGroups, bookmarks, browserHistoryEntries, browserDownloads, recentVideos, videoPlaybackReports, editorPath, editorDraft, calendarEntries, reminders, weatherUnit };
+    const snapshot: DesktopSnapshot = { setupComplete, windows, windowGroups, activeWallpaperId, customWallpapers, notes, activeNoteId, virtualFileSystem, fileContents, trashItems, finderPath, systemAppearance, volume, currentTrack, browserTabs, activeBrowserTabId, browserTabGroups, bookmarks, browserHistoryEntries, browserDownloads, recentVideos, videoPlaybackReports, editorPath, editorDraft, calendarEntries, reminders, weatherUnit };
     desktopSnapshotRef.current = snapshot;
     const timer = window.setTimeout(() => {
       try { window.localStorage.setItem(DESKTOP_STATE_KEY, JSON.stringify(snapshot)); } catch { /* storage may be unavailable */ }
     }, 320);
     return () => window.clearTimeout(timer);
-  }, [setupComplete, windows, activeWallpaperId, customWallpapers, notes, activeNoteId, virtualFileSystem, fileContents, trashItems, finderPath, systemAppearance, volume, currentTrack, browserTabs, activeBrowserTabId, browserTabGroups, bookmarks, browserHistoryEntries, browserDownloads, recentVideos, videoPlaybackReports, editorPath, editorDraft, calendarEntries, reminders, weatherUnit]);
+  }, [setupComplete, windows, windowGroups, activeWallpaperId, customWallpapers, notes, activeNoteId, virtualFileSystem, fileContents, trashItems, finderPath, systemAppearance, volume, currentTrack, browserTabs, activeBrowserTabId, browserTabGroups, bookmarks, browserHistoryEntries, browserDownloads, recentVideos, videoPlaybackReports, editorPath, editorDraft, calendarEntries, reminders, weatherUnit]);
 
   useEffect(() => {
     const flushSnapshot = () => {
@@ -951,6 +1120,10 @@ export default function Home() {
       if (selectedPhotoId && !editing && event.key === "ArrowLeft") { event.preventDefault(); movePhoto(-1); return; }
       if (selectedPhotoId && !editing && event.key === "ArrowRight") { event.preventDefault(); movePhoto(1); return; }
       if (event.key === "Escape") setActivePanel(null);
+      if (!editing && event.key === "F3") {
+        event.preventDefault();
+        setActivePanel("mission");
+      }
       if (!editing && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "w") {
         const topWindow = topVisibleWindow(windows);
         if (topWindow) { event.preventDefault(); setWindows((currentWindows) => closeWindowById(currentWindows, topWindow.id)); }
@@ -1150,6 +1323,30 @@ export default function Home() {
   });
   const closeAllApps = () => { setWindows((currentWindows) => closeAllWindows<typeof currentWindows[number]>()); setActiveWindowId(null); setActivePanel(null); };
   const minimizeAllApps = () => setWindows((currentWindows) => minimizeAllWindows(currentWindows));
+  const createWindowGroup = (windowId = activeWindowId) => {
+    if (!windowId) return;
+    const group: DesktopWindowGroup = { id: `window-group-${Date.now()}`, title: `工作组 ${windowGroups.length + 1}`, color: windowGroupColors[windowGroups.length % windowGroupColors.length] };
+    setWindowGroups((groups) => [...groups, group]);
+    setWindows((currentWindows) => assignWindowToGroup(currentWindows, windowId, group.id));
+  };
+  const renameWindowGroup = (groupId: string, title: string) => {
+    const nextTitle = title.trim();
+    setWindowGroups((groups) => groups.map((group) => group.id === groupId ? { ...group, title: nextTitle || "未命名工作组" } : group));
+  };
+  const assignAppToWindowGroup = (windowId: AppName, groupId?: string) => setWindows((currentWindows) => assignWindowToGroup(currentWindows, windowId, groupId));
+  const focusWindowGroup = (groupId: string) => {
+    setWindows((currentWindows) => bringWindowGroupToFront(currentWindows, groupId));
+    const target = [...windows].filter((windowItem) => windowItem.groupId === groupId).sort((left, right) => right.zIndex - left.zIndex)[0];
+    if (target) setActiveWindowId(target.id);
+  };
+  const minimizeWindowGroup = (groupId: string) => {
+    setWindows((currentWindows) => setWindowGroupMinimized(currentWindows, groupId, true));
+    setActiveWindowId((currentId) => windows.find((windowItem) => windowItem.id === currentId)?.groupId === groupId ? topVisibleWindow(setWindowGroupMinimized(windows, groupId, true))?.id ?? null : currentId);
+  };
+  const deleteWindowGroup = (groupId: string) => {
+    setWindows((currentWindows) => removeWindowGroup(currentWindows, groupId));
+    setWindowGroups((groups) => groups.filter((group) => group.id !== groupId));
+  };
 
   const registerNativeVideo = (video: HTMLVideoElement) => {
     nativeVideoRef.current = video;
@@ -1700,6 +1897,7 @@ export default function Home() {
           <button className="menu-word" onClick={() => openApp("notes")}>编辑</button>
           <button className="menu-word" onClick={() => openApp("photos")}>视图</button>
           <button className="menu-word" onClick={() => setActivePanel(activePanel === "windows" ? null : "windows")}>窗口</button>
+          <button className="menu-word" onClick={() => setActivePanel("mission")}>总览</button>
           <button className="menu-word" onClick={() => setActivePanel("about")}>帮助</button>
         </div>
         <div className="menu-right">
@@ -1764,6 +1962,9 @@ export default function Home() {
                   <p>位置</p>
                   <button className={finderPath === `${VIRTUAL_HOME}/Pictures` ? "sidebar-active" : ""} onClick={() => changeFinderPath(`${VIRTUAL_HOME}/Pictures`)}><Image size={15} /> 图片</button>
                   <button onClick={() => changeFinderPath(VIRTUAL_HOME)}><CloudSun size={15} /> Freshdesk Drive</button>
+                  <p>本地位置</p>
+                  <button className={localFinder ? "sidebar-active" : ""} onClick={() => void authorizeLocalFinder()}><FolderOpen size={15} /> 选择文件夹</button>
+                  {localFinder && <button onClick={() => void refreshLocalFinder(localFinder.grant.id)}><Folder size={15} /> {localFinder.grant.name}</button>}
                 </aside>
                 <div className="finder-content">
                   <div className="finder-toolbar"><nav aria-label="文件夹导航"><button aria-label="返回上级目录" disabled={finderPath === VIRTUAL_HOME} onClick={() => changeFinderPath(virtualParent(finderPath))}><ChevronLeft size={17} /></button><button aria-label="前进目录" disabled><ChevronRight size={17} /></button></nav><strong>{finderPath === VIRTUAL_HOME ? "我的文件" : virtualName(finderPath)}</strong><label className="finder-search"><Search size={13} /><input value={finderSearch} onChange={(event) => setFinderSearch(event.target.value)} placeholder="查找文件" aria-label="Finder 文件搜索" /><select value={finderSearchScope} onChange={(event) => setFinderSearchScope(event.target.value as "current" | "downloads" | "pictures")} aria-label="文件搜索范围"><option value="current">当前目录</option><option value="downloads">下载项</option><option value="pictures">图片</option></select></label><span className="finder-toolbar-note">{finderSearch.trim() ? `${finderSearchResults.length} 个结果` : `${displayVirtualPath(finderPath)} · 双击打开`}</span><LayoutGrid size={17} /></div>
@@ -1775,6 +1976,8 @@ export default function Home() {
                     })}
                   </div>
                   <div className="finder-footer"><span>{finderSearch.trim() ? `${finderSearchResults.length} 个匹配结果` : `${finderEntries.length} 个项目`}</span><span>文本双击编辑 · 右键可管理 · 拖放删除</span></div>
+                  {localFinder ? <section className="local-finder-panel" aria-label="已授权的本地文件夹"><header><div><FolderOpen size={16} /><span>已授权位置</span><strong>{localFinder.grant.name}</strong><small>{localFinder.relativePath || "根目录"} · {localFinder.entries.length} 个项目</small></div><div><button disabled={!localFinder.relativePath || localFinderLoading} aria-label="返回本地上级目录" onClick={() => void refreshLocalFinder(localFinder.grant.id, localFinder.relativePath.split("/").slice(0, -1).join("/"))}><ChevronLeft size={14} /></button><button aria-label="撤销本地文件夹授权" onClick={() => void window.freshdeskDesktop?.revokeLocalFolder(localFinder.grant.id).then(() => { setLocalFinder(null); setLocalFinderPreview(null); setLocalFinderStatus("已撤销本地文件夹授权。已打开的预览已失效。"); })}><X size={14} /> 撤销</button></div></header><p className="local-finder-notice"><CircleHelp size={13} /> {localFinderStatus}</p><div className="local-finder-list">{localFinderLoading ? <div className="local-finder-empty"><RotateCw className="spinning" size={17} /> 正在读取已授权文件夹…</div> : localFinder.entries.map((entry) => <article key={entry.relativePath}><button className="local-finder-open" onClick={() => void openLocalFinderEntry(entry)}>{entry.kind === "directory" ? <Folder size={24} fill="#a4c8ff" strokeWidth={1.2} /> : entry.mediaUrl && /^(jpg|jpeg|png|webp|gif|bmp|svg)$/i.test(entry.extension) ? <Image size={22} /> : entry.mediaUrl ? <Headphones size={22} /> : <FileText size={22} />}<span><b>{entry.name}</b><small>{entry.kind === "directory" ? "文件夹" : entry.extension ? `${entry.extension.toUpperCase()} · ${Math.max(1, Math.ceil(entry.size / 1024))} KB` : "文件"}</small></span></button><div><button aria-label={`重命名 ${entry.name}`} onClick={() => void renameLocalFinderEntry(entry)}><Pencil size={13} /></button><button className="local-finder-trash" aria-label={`移 ${entry.name} 到系统回收站`} onClick={() => void trashLocalFinderEntry(entry)}><Trash2 size={13} /></button></div></article>)}</div></section> : <section className="local-finder-callout"><FolderOpen size={21} /><div><strong>连接本地文件夹</strong><span>{localFinderStatus}</span></div><button onClick={() => void authorizeLocalFinder()}>选择文件夹</button></section>}
+                  {localFinderPreview && <div className="local-finder-preview" role="dialog" aria-label="本地文件预览"><header><div><FileText size={15} /><strong>{localFinderPreview.name}</strong></div><button aria-label="关闭本地文件预览" onClick={() => setLocalFinderPreview(null)}><X size={14} /></button></header>{localFinderPreview.content !== undefined ? <pre>{localFinderPreview.content}</pre> : localFinderPreview.mediaUrl && /\.(jpg|jpeg|png|webp|gif|bmp|svg)$/i.test(localFinderPreview.name) ? <img src={localFinderPreview.mediaUrl} alt={localFinderPreview.name} /> : localFinderPreview.mediaUrl ? <audio controls src={localFinderPreview.mediaUrl}>当前系统无法播放这个音频文件。</audio> : null}</div>}
                   {previewFilePath && <div className="finder-preview" role="dialog" aria-label="文件预览"><header><div><FileText size={16} /><span>{virtualName(previewFilePath)}</span></div><div>{isTextFile(previewFilePath) && <button className="finder-preview-edit" onClick={() => openTextEditor(previewFilePath)}><FilePenLine size={13} /> 编辑</button>}{isImageFile(previewFilePath) && <button className="finder-preview-edit" onClick={() => setFileAsWallpaper(previewFilePath)}><Palette size={13} /> 设为壁纸</button>}<button aria-label="关闭文件预览" onClick={() => setPreviewFilePath(null)}><X size={15} /></button></div></header>{isImageFile(previewFilePath) ? <img src={previewFileImage(previewFilePath)} alt={virtualName(previewFilePath)} /> : <pre>{previewFileText(previewFilePath)}</pre>}</div>}
                   {fileInfoPath && <div className="finder-file-info" role="dialog" aria-label="文件属性"><header><strong>文件属性</strong><button aria-label="关闭文件属性" onClick={() => setFileInfoPath(null)}><X size={14} /></button></header><dl><div><dt>名称</dt><dd>{virtualName(fileInfoPath)}</dd></div><div><dt>位置</dt><dd>{displayVirtualPath(virtualParent(fileInfoPath))}</dd></div><div><dt>类型</dt><dd>{isTextFile(fileInfoPath) ? "文本文件" : isImageFile(fileInfoPath) ? "图片" : "文件"}</dd></div><div><dt>大小</dt><dd>{fileContents[fileInfoPath] ? `${fileContents[fileInfoPath].length} 个字符` : "—"}</dd></div></dl></div>}
                   {finderContextMenu && <aside className="finder-context-menu" role="menu" style={{ left: finderContextMenu.x, top: finderContextMenu.y }}><button role="menuitem" disabled={!isTextFile(finderContextMenu.path)} onClick={() => openTextEditor(finderContextMenu.path)}><FilePenLine size={14} />编辑</button><button role="menuitem" disabled={!isImageFile(finderContextMenu.path)} onClick={() => { setFileAsWallpaper(finderContextMenu.path); setFinderContextMenu(null); }}><Palette size={14} />设为壁纸</button><button role="menuitem" onClick={() => { startRenameFile(finderContextMenu.path); setFinderContextMenu(null); }}><Pencil size={14} />重命名</button><button role="menuitem" onClick={() => { setFileInfoPath(finderContextMenu.path); setFinderContextMenu(null); }}><CircleHelp size={14} />查看属性</button><button role="menuitem" className="danger" onClick={() => { moveFileToTrash(finderContextMenu.path); setFinderContextMenu(null); }}><Trash2 size={14} />移到回收站</button></aside>}
@@ -1792,14 +1995,15 @@ export default function Home() {
           {windowItem.id === "music" && (
             <WindowChrome title="音乐" appWindow={windowItem} onClose={() => closeApp("music")} onMinimize={() => minimizeApp("music")} onFocus={() => bringToFront("music")} onMaximize={() => toggleMaximize("music")} onBoundsChange={(bounds) => updateWindowBounds("music", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("music", side)} className="music-window">
               <div className="music-body">
-                <aside className="music-sidebar"><div className="music-brand"><img src={BRAND_MARK} alt="" /> <span>Freshdesk Music</span></div><button className="library-active"><Headphones size={16} /> 现在收听</button><button><Compass size={16} /> 浏览</button><button><Grid2X2 size={16} /> 资料库</button><div className="playlist-add"><span>播放列表</span><Plus size={15} /></div><button className="playlist"><span className="playlist-dot coral" /> 已添加</button><button className="playlist"><span className="playlist-dot sky" /> 工作流</button></aside>
+                <aside className="music-sidebar"><div className="music-brand"><img src={BRAND_MARK} alt="" /> <span>Freshdesk Music</span></div><button className="library-active"><Headphones size={16} /> 现在收听</button><button><Compass size={16} /> 浏览</button><button onClick={() => void importLocalMedia("music")}><Grid2X2 size={16} /> 导入本地音乐</button><div className="playlist-add"><span>播放列表</span><Plus size={15} /></div><button className="playlist"><span className="playlist-dot coral" /> 已添加</button><button className="playlist"><span className="playlist-dot sky" /> 工作流</button></aside>
                 <div className="music-content">
                   <div className="music-hero"><div><span className="eyebrow">为此刻准备</span><h2>空间感<br />收藏。</h2><p>一些适合打开新桌面时聆听的声音。</p></div><img src={ALBUM_TIDE} alt="抽象音乐封面" /></div>
                   <div className="album-heading"><h3>今天的选择</h3><button>查看全部 <ChevronRight size={14} /></button></div>
                   <div className="album-row">
                     {tracks.map((track, index) => <button className={`album-tile ${index === currentTrack ? "active" : ""}`} key={track.title} onClick={() => { setCurrentTrack(index); setProgress(0); openApp("music"); }}><img src={track.cover} alt="" /><strong>{track.title}</strong><span>{track.artist}</span></button>)}
                   </div>
-                  <div className="track-list">{tracks.map((track, index) => <button key={track.title} onClick={() => { setCurrentTrack(index); setProgress(0); if (!isPlaying) playMusic(); }}><span className="track-index">{index === currentTrack && isPlaying ? <Pause size={12} fill="currentColor" /> : <Play size={12} fill="currentColor" />}</span><img src={track.cover} alt="" /><div><strong>{track.title}</strong><span>{track.artist}</span></div><span>{track.time}</span><MoreHorizontal size={18} /></button>)}</div>
+                  <div className="track-list">{tracks.map((track, index) => <button key={`${track.title}-${index}`} onClick={() => { setCurrentTrack(index); setProgress(0); if (!isPlaying) playMusic(); }}><span className="track-index">{index === currentTrack && isPlaying ? <Pause size={12} fill="currentColor" /> : <Play size={12} fill="currentColor" />}</span><img src={track.cover} alt="" /><div><strong>{track.title}</strong><span>{track.artist}</span></div><span>{track.time}</span><MoreHorizontal size={18} /></button>)}</div>
+                  <section className="local-media-library music-local-library"><header><div><span className="eyebrow">本地资料库</span><h3>你的音乐</h3><p>{localMusic.length ? `${localMusic.length} 首已导入 · ${localMediaStatus}` : localMediaStatus}</p></div><button onClick={() => void importLocalMedia("music")}><Plus size={14} /> 导入音乐</button></header>{localMusic.length ? <div>{localMusic.map((item) => <article key={item.id}><button onClick={() => { const index = tracks.findIndex((track) => "localId" in track && track.localId === item.id); if (index >= 0) { setCurrentTrack(index); setProgress(0); playMusic(); } }}><Headphones size={16} /><span><b>{item.title}</b><small>{item.extension.toUpperCase()} · {Math.max(1, Math.ceil(item.size / 1024))} KB</small></span></button><button aria-label={`从资料库移除 ${item.title}`} onClick={() => void removeLocalMedia("music", item.id)}><X size={14} /> 移除</button></article>)}</div> : <div className="local-media-empty"><Headphones size={20} /><span>选择音频文件后，它们会显示在此处并可直接播放。</span></div>}</section>
                 </div>
               </div>
               <div className="music-player"><img src={current.cover} alt="" /><div className="player-track"><strong>{current.title}</strong><span>{current.artist}</span><input aria-label="播放进度" type="range" min={0} max={duration || 150} value={progress} onChange={(event) => { const value = Number(event.target.value); setProgress(value); if (audioRef.current) audioRef.current.currentTime = value; }} /></div><span className="player-time">{formatDuration(progress)} / {formatDuration(duration)}</span><div className="player-controls"><button aria-label="上一首" onClick={() => skipTrack(-1)}><ChevronLeft size={18} /></button><button className="main-play" aria-label={isPlaying ? "暂停" : "播放"} onClick={playMusic}>{isPlaying ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}</button><button aria-label="下一首" onClick={() => skipTrack(1)}><ChevronRight size={18} /></button></div><Volume2 size={16} /><input className="volume-slider" aria-label="音量" type="range" min={0} max={100} value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></div>
@@ -1820,7 +2024,9 @@ export default function Home() {
 
           {windowItem.id === "photos" && (
             <WindowChrome title="灵感相册" appWindow={windowItem} onClose={() => closeApp("photos")} onMinimize={() => minimizeApp("photos")} onFocus={() => bringToFront("photos")} onMaximize={() => toggleMaximize("photos")} onBoundsChange={(bounds) => updateWindowBounds("photos", bounds)} onSnapPreviewChange={setSnapPreview} onSnap={(side) => snapWindow("photos", side)} className="photos-window">
-              <div className="photos-body">{selectedPhoto ? <div className="photo-viewer"><div className="photo-viewer-top"><button className="photo-back" onClick={() => setSelectedPhotoId(null)}><ChevronLeft size={16} /> 图库</button><span>{Math.max(1, photoItems.findIndex((photo) => photo.id === selectedPhoto.id) + 1)} / {photoItems.length}</span><div><button aria-label="上一张图片" onClick={() => movePhoto(-1)}><ChevronLeft size={16} /></button><button aria-label="下一张图片" onClick={() => movePhoto(1)}><ChevronRight size={16} /></button></div></div><div className="photo-stage"><button className="photo-stage-control left" aria-label="上一张图片" onClick={() => movePhoto(-1)}><ChevronLeft size={22} /></button><img src={selectedPhoto.src} alt={selectedPhoto.alt} /><button className="photo-stage-control right" aria-label="下一张图片" onClick={() => movePhoto(1)}><ChevronRight size={22} /></button></div><div className="photo-viewer-meta"><div><span className="eyebrow">已打开 · 可用左右箭头切换</span><h2>{selectedPhoto.title}</h2><p>{selectedPhoto.subtitle} · 可在“桌面与外观”中设为壁纸。</p></div><button className="photo-set-wallpaper" onClick={() => setWallpaperFromSource(selectedPhoto.src, selectedPhoto.title)}>设为壁纸</button></div></div> : <><header><div><span className="eyebrow">灵感相册</span><h2>{photoViewMode === "library" ? "我的图库。" : "光线留下的痕迹。"}</h2></div><div className="photos-view-actions"><button className={photoViewMode === "highlights" ? "active" : ""} onClick={() => setPhotoViewMode("highlights")}><Sparkles size={15} /> 精选</button><button className={photoViewMode === "library" ? "active" : ""} onClick={() => setPhotoViewMode("library")}><LayoutGrid size={15} /> 图库</button></div></header>{photoViewMode === "library" ? <div className="photo-library-grid">{photoItems.map((photo) => <button key={photo.id} className="photo-library-item" onClick={() => setSelectedPhotoId(photo.id)}><img src={photo.src} alt={photo.alt} /><span><b>{photo.title}</b><small>{photo.subtitle}</small></span></button>)}</div> : <><div className="photo-mosaic">{photoItems.slice(0, 4).map((photo) => <button key={photo.id} className="photo-tile" onClick={() => setSelectedPhotoId(photo.id)}><img src={photo.src} alt={photo.alt} /><span>{photo.title}</span></button>)}<button className="mosaic-caption" onClick={() => { setPhotoViewMode("library"); setSelectedPhotoId("alpine"); }}><Sparkles size={17} /><span>最近添加<br /><b>2 张壁纸</b></span></button></div><p>点开任意照片可查看大图；打开后可点击控制按钮或使用键盘左右箭头切换。</p></>}</>}</div>
+              <div className="photos-body">
+                {selectedPhoto ? <div className="photo-viewer"><div className="photo-viewer-top"><button className="photo-back" onClick={() => setSelectedPhotoId(null)}><ChevronLeft size={16} /> 图库</button><span>{Math.max(1, allPhotoItems.findIndex((photo) => photo.id === selectedPhoto.id) + 1)} / {allPhotoItems.length}</span><div><button aria-label="上一张图片" onClick={() => movePhoto(-1)}><ChevronLeft size={16} /></button><button aria-label="下一张图片" onClick={() => movePhoto(1)}><ChevronRight size={16} /></button></div></div><div className="photo-stage"><button className="photo-stage-control left" aria-label="上一张图片" onClick={() => movePhoto(-1)}><ChevronLeft size={22} /></button><img src={selectedPhoto.src} alt={selectedPhoto.alt} /><button className="photo-stage-control right" aria-label="下一张图片" onClick={() => movePhoto(1)}><ChevronRight size={22} /></button></div><div className="photo-viewer-meta"><div><span className="eyebrow">已打开 · 可用左右箭头切换</span><h2>{selectedPhoto.title}</h2><p>{selectedPhoto.subtitle} · 可在“桌面与外观”中设为壁纸。</p></div><div className="photo-viewer-actions"><button className="photo-set-wallpaper" onClick={() => setWallpaperFromSource(selectedPhoto.src, selectedPhoto.title)}>设为壁纸</button>{selectedPhoto.local && <button className="photo-remove-local" onClick={() => void removeLocalMedia("photo", selectedPhoto.id)}><X size={14} /> 移除</button>}</div></div></div> : <><header><div><span className="eyebrow">灵感相册</span><h2>{photoViewMode === "library" ? "我的图库。" : "光线留下的痕迹。"}</h2></div><div className="photos-view-actions"><button className={photoViewMode === "highlights" ? "active" : ""} onClick={() => setPhotoViewMode("highlights")}><Sparkles size={15} /> 精选</button><button className={photoViewMode === "library" ? "active" : ""} onClick={() => setPhotoViewMode("library")}><LayoutGrid size={15} /> 图库</button><button onClick={() => void importLocalMedia("photo")}><Plus size={15} /> 导入</button></div></header>{photoViewMode === "library" ? <><div className="photo-library-grid">{allPhotoItems.map((photo) => <button key={photo.id} className="photo-library-item" onClick={() => setSelectedPhotoId(photo.id)}><img src={photo.src} alt={photo.alt} /><span><b>{photo.title}</b><small>{photo.subtitle}</small></span></button>)}</div><p className="photo-library-status">{localPhotos.length ? `已导入 ${localPhotos.length} 张本地照片 · ${localMediaStatus}` : localMediaStatus}</p></> : <><div className="photo-mosaic">{allPhotoItems.slice(0, 4).map((photo) => <button key={photo.id} className="photo-tile" onClick={() => setSelectedPhotoId(photo.id)}><img src={photo.src} alt={photo.alt} /><span>{photo.title}</span></button>)}<button className="mosaic-caption" onClick={() => { setPhotoViewMode("library"); setSelectedPhotoId(allPhotoItems.at(-1)?.id ?? "alpine"); }}><Sparkles size={17} /><span>最近添加<br /><b>{localPhotos.length ? `${localPhotos.length} 张本地照片` : "2 张壁纸"}</b></span></button></div><p>点开任意照片可查看大图；打开后可点击控制按钮或使用键盘左右箭头切换。</p></>}</>}
+              </div>
             </WindowChrome>
           )}
 
@@ -1935,6 +2141,8 @@ export default function Home() {
       {activePanel === "calendar" && <section className="calendar-panel popover-panel" onClick={(event) => event.stopPropagation()}><span>{now.toLocaleDateString("zh-CN", { year: "numeric", month: "long" })}</span><h2>{now.getDate()}</h2><p>{currentDate}</p><div className="calendar-line" /><div className="calendar-event"><span>08:30</span><div><b>新的一天</b><small>留一点空间给自己。</small></div></div></section>}
 
       {activePanel === "windows" && <section className="window-manager-panel popover-panel" onClick={(event) => event.stopPropagation()}><header><div><Grid2X2 size={15} /><span>窗口管理</span><small>{managedWindows.length} 个已打开</small></div><button aria-label="关闭窗口管理" onClick={() => setActivePanel(null)}><X size={14} /></button></header>{managedWindows.length ? <div className="window-manager-list">{managedWindows.map((item) => { const meta = appMeta[item.id]; const Icon = meta.icon; return <article key={item.id} className={item.minimized ? "minimized" : ""}><button className="window-manager-focus" onClick={() => { bringToFront(item.id); setActivePanel(null); }}><span className="window-manager-icon" style={{ background: meta.color }}><Icon size={14} /></span><span><b>{meta.label}</b><small>{item.minimized ? "已最小化" : "正在桌面上"}{item === managedWindows[0] && !item.minimized ? " · 最前" : ""}</small></span></button><div><button aria-label={`最小化${meta.label}`} onClick={() => minimizeApp(item.id)} disabled={item.minimized}><Minimize2 size={13} /></button><button className="window-manager-close" aria-label={`关闭${meta.label}`} onClick={() => closeApp(item.id)}><X size={14} /></button></div></article>; })}</div> : <div className="window-manager-empty"><Grid2X2 size={21} /><span>没有打开的窗口</span></div>}<footer><button onClick={minimizeAllApps} disabled={!managedWindows.some((item) => !item.minimized)}>最小化全部</button><button className="window-manager-close-all" onClick={closeAllApps} disabled={!managedWindows.length}><X size={13} /> 关闭全部</button></footer></section>}
+
+      {activePanel === "mission" && <section className="mission-control" role="dialog" aria-modal="true" aria-label="Mission Control 窗口总览" onClick={(event) => event.stopPropagation()}><header className="mission-header"><div><span className="eyebrow">Freshdesk Desktop</span><h2>窗口总览</h2><p>{windows.length ? `${windows.length} 个窗口 · ${missionGroups.length} 个工作组` : "当前没有打开的窗口"}</p></div><div><button className="mission-create-group" disabled={!activeWindowId} onClick={() => createWindowGroup()}><Plus size={15} /> 为当前窗口建组</button><button className="mission-close" aria-label="关闭 Mission Control" onClick={() => setActivePanel(null)}><X size={17} /></button></div></header><div className="mission-grid">{missionGroups.map((group) => <section className="mission-group" key={group.id} style={{ "--group-color": group.color } as React.CSSProperties}><header><button onClick={() => { focusWindowGroup(group.id); setActivePanel(null); }}><i /><span>{group.title}</span><small>{group.windows.length} 个窗口</small></button><div><button aria-label={`最小化 ${group.title}`} onClick={() => minimizeWindowGroup(group.id)}><Minimize2 size={14} /></button><button aria-label={`解散 ${group.title}`} onClick={() => deleteWindowGroup(group.id)}><X size={14} /></button></div></header><div className="mission-group-windows">{group.windows.map((item) => { const meta = appMeta[item.id]; const Icon = meta.icon; return <article className={item.minimized ? "minimized" : ""} key={item.id}><button className="mission-window-focus" onClick={() => { bringToFront(item.id); setActivePanel(null); }}><span className="mission-window-icon" style={{ background: meta.color }}><Icon size={18} /></span><span><b>{meta.label}</b><small>{item.minimized ? "已最小化" : "点击聚焦"}</small></span></button><button className="mission-window-close" aria-label={`关闭 ${meta.label}`} onClick={() => closeApp(item.id)}><X size={14} /></button></article>; })}</div></section>)}{ungroupedMissionWindows.map((item) => { const meta = appMeta[item.id]; const Icon = meta.icon; return <article className={`mission-window-card ${item.minimized ? "minimized" : ""}`} key={item.id}><button className="mission-window-focus" onClick={() => { bringToFront(item.id); setActivePanel(null); }}><span className="mission-window-icon" style={{ background: meta.color }}><Icon size={22} /></span><span><b>{meta.label}</b><small>{item.minimized ? "已最小化 · 点击恢复" : "点击聚焦窗口"}</small></span></button><div className="mission-window-actions"><select aria-label={`${meta.label} 的窗口组`} value="" onChange={(event) => assignAppToWindowGroup(item.id, event.target.value || undefined)}><option value="">加入工作组…</option>{windowGroups.map((group) => <option key={group.id} value={group.id}>{group.title}</option>)}</select><button aria-label={`为 ${meta.label} 新建工作组`} onClick={() => createWindowGroup(item.id)}><Plus size={14} /></button><button className="mission-window-close" aria-label={`关闭 ${meta.label}`} onClick={() => closeApp(item.id)}><X size={14} /></button></div></article>})}</div><footer><span><Command size={13} /> F3 打开 · Esc 返回桌面</span><button onClick={() => minimizeAllApps()} disabled={!windows.some((item) => !item.minimized)}>最小化全部</button></footer></section>}
 
       {activePanel === "about" && <section className="about-panel popover-panel" onClick={(event) => event.stopPropagation()}><img src={BRAND_MARK} alt="Freshdesk" /><div><strong>Freshdesk Desktop</strong><span>演示版 · 1.0</span></div><p>一个以新设备开机感为灵感的浏览器桌面体验。所有标识与内容均为原创。</p></section>}
 

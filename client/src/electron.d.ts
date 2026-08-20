@@ -16,6 +16,9 @@ declare global {
   type FreshdeskBackupResult = { saved: boolean; path?: string };
   type FreshdeskNativeBrowserBounds = { x: number; y: number; width: number; height: number };
   type FreshdeskNativeBrowserStatus = { tabId: string; type: "loading" | "stopped" | "navigated" | "title" | "failed"; url?: string; title?: string; message?: string };
+  type FreshdeskLocalFolderGrant = { id: string; name: string; grantedAt: string };
+  type FreshdeskLocalFileEntry = { name: string; relativePath: string; kind: "directory" | "file"; extension: string; size: number; modifiedAt: string; mediaUrl?: string };
+  type FreshdeskLocalMediaItem = { id: string; title: string; extension: string; size: number; importedAt: string; mediaUrl: string };
 
   interface Window {
     freshdeskDesktop?: {
@@ -34,6 +37,15 @@ declare global {
       exportDesktopState: (payload: unknown) => Promise<FreshdeskBackupResult>;
       backupDesktopState: (payload: unknown) => Promise<FreshdeskBackupResult>;
       openDesktopBackup: () => Promise<{ selected: boolean; raw?: string; path?: string }>;
+      authorizeLocalFolder: () => Promise<{ authorized: boolean; grant?: FreshdeskLocalFolderGrant }>;
+      revokeLocalFolder: (grantId: string) => Promise<{ revoked: boolean }>;
+      listAuthorizedFolder: (payload: { grantId: string; relativePath?: string }) => Promise<{ grant: FreshdeskLocalFolderGrant; relativePath: string; entries: FreshdeskLocalFileEntry[] }>;
+      readAuthorizedText: (payload: { grantId: string; relativePath: string }) => Promise<{ content: string; size: number }>;
+      renameAuthorizedEntry: (payload: { grantId: string; relativePath: string; name: string }) => Promise<{ renamed: boolean; relativePath: string }>;
+      trashAuthorizedEntry: (payload: { grantId: string; relativePath: string }) => Promise<{ trashed: boolean }>;
+      importLocalMedia: (kind: "music" | "photo") => Promise<{ imported: FreshdeskLocalMediaItem[]; skipped: string[] }>;
+      listLocalMedia: (kind: "music" | "photo") => Promise<FreshdeskLocalMediaItem[]>;
+      removeLocalMedia: (id: string) => Promise<{ removed: boolean }>;
       onUpdateStatus: (listener: (status: { state: "checking" | "current" | "downloading" | "ready" | "error"; message: string }) => void) => () => void;
       onDownloadStatus: (listener: (status: FreshdeskDownloadStatus) => void) => () => void;
       onNativeBrowserStatus: (listener: (status: FreshdeskNativeBrowserStatus) => void) => () => void;

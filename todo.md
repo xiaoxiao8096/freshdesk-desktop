@@ -168,3 +168,9 @@
 - [x] 使用 Electron 35.7.5 建立独立最小复现，逐项验证 target=_blank 锚点、window.open、预加载捕获、new-window、setWindowOpenHandler 与当前标签 loadURL 的实际事件序列；仅将实机成功路径集成回 Freshdesk。绝对路径 guest preload 已实机令 Bing 当前 guest URL 改变。
 - [x] 将主窗口 Electron preload 从未生效的 ESM 路径替换为 CommonJS 桥接，并在 Windows 实机确认 window.freshdeskDesktop 存在、浏览器不再回退 iframe、webview guest preload 标记为 active。
 - [x] 自动将 v1.0.25 官方安装程序写入用户既有 Downloads\Freshdesk Desktop\App 目录并完成覆盖安装；验证新版启动、版本、核心高频应用窗口与 Chromium 当前标签能力。NSIS 安装器在该远程会话中完整下载但被 Windows 报为无法执行，已改用同一正式 win-unpacked 资源的最小化热更新替代路径；实际目录版本为 1.0.25，主窗口、桥接、HIG 高级应用窗口与 Chromium 原生处理器均已验证运行。
+- [x] 增加窗口分组：可创建、重命名、向组内加入/移出窗口，并在组内统一聚焦、最小化或恢复。已加入可持久化分组状态、窗口组总览与成组操作。
+- [x] 增加 Mission Control 总览：以可键盘操作的网格展示所有窗口与窗口组，支持聚焦、关闭和快速切换。菜单“总览”与 F3 均可打开，卡片支持聚焦、关闭、最小化、解散或新建/加入工作组。
+- [x] 为 Finder 增加用户主动授权的本地文件访问：仅通过原生选择器选择文件或文件夹，显示授权范围、可撤销授权，并限制操作在已授权路径内。主进程校验相对路径与授权根；支持范围内目录浏览、文本/媒体预览、重命名与移至 Windows 回收站。
+- [x] 为音乐和照片增加从已授权本地路径导入、去重、元数据展示、移除与持久化媒体库管理。通过原生多选器导入，主进程持久化元数据并以受控临时媒体 URL 预览/播放；“移除”仅删除 Freshdesk 资料库记录，不删除原文件。
+- [x] 将左上角窗口控制按钮及命中区域增大，保留视觉层级；减少不必要的动画/重绘并补充性能与交互回归测试。交通灯保持 14px 视觉大小但每项为 28px 可点击区域；拖拽/缩放状态更新按 requestAnimationFrame 合并，交互态关闭高成本滤镜。88 项 Vitest 与生产构建通过。
+- [ ] 构建并发布包含多任务、本地媒体授权和性能优化的 Windows v1.0.26，随后在用户现有 Freshdesk Desktop 中验证新版本启动与关键入口。
